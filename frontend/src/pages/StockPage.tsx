@@ -1,0 +1,101 @@
+import { useQuery } from "@tanstack/react-query";
+import type { ColumnDef } from "@tanstack/react-table";
+import Big from "big.js";
+import { useMemo, useState } from "react";
+import { useTranslation } from "react-i18next";
+import { DataTable } from "@/components/DataTable";
+import { useActiveLocations } from "@/components/pickers";
+import { Alert, Input, PageHeader, Select } from "@/components/ui";
+import { api } from "@/lib/api";
+import { errorMessage } from "@/lib/errors";
+import { useMoney, useQty } from "@/lib/format";
+import type { StockRow } from "@/lib/types";
+import { useCategoryName } from "./ProductsPage";
+
+export function StockPage() {
+  const { t } = useTranslation();
+  const money = useMoney();
+  const qty = useQty();
+  const catName = useCategoryName();
+  const locations = useActiveLocations();
+  const [location, setLocation] = useState("");
+  const [search, setSearch] = useState("");
+  const [includeZero, setIncludeZero] = useState(false);
+
+  const params = new URLSearchParams({ ...(location ? { location_id: location } : {}), ...(includeZero ? { include_zero: "true" } : {}) });
+  const rows = useQuery({ queryKey: ["stock", params.toString()], queryFn: () => api<StockRow[]>(`/stock?${params}`) });
+
+  const columns = useMemo<ColumnDef<StockRow, unknown>[]>(
+    () => [
+      {
+        id: "product",
+        header: t("products.name"),
+        accessorFn: (r) => r.product_name.toLowerCase(),
+        cell: ({ row: { original: r } }) => (
+          <div>
+            <div className="font-medium">{r.product_name}</div>
+            <div className="text-xs text-zinc-500">
+              {r.product_sku} · {catName({ code: r.category_code, name: r.category_name })}
+            </div>
+          </div>
+        ),
+      },
+      { id: "location", header: t("docs.location"), accessorFn: (r) => r.location_name },
+      {
+        id: "qty",
+        header: t("docs.qty"),
+        meta: { align: "right" },
+        accessorFn: (r) => Number(r.qty_base),
+        cell: ({ row: { original: r } }) => {
+          const f = qty(r.qty_base, r);
+          return (
+            <span className={new Big(r.qty_base).lt(0) ? "text-red-600" : ""}>
+              {f.main}
+              {f.alt && <span className="block text-xs text-zinc-500">{f.alt}</span>}
+            </span>
+          );
+        },
+      },
+      { id: "value", header: t("products.value"), meta: { align: "right" }, accessorFn: (r) => Number(r.value), cell: ({ row: { original: r } }) => money(r.value) },
+    ],
+    [t, qty, money, catName],
+  );
+
+  const total = (rows.data ?? []).reduce((s, r) => s.plus(r.value), new Big(0));
+
+  return (
+    <>
+      <PageHeader title={t("nav.stock")} />
+      <div className="mb-4 grid gap-3 sm:grid-cols-3">
+        <Input type="search" placeholder={t("products.searchPlaceholder")} value={search} onChange={(e) => setSearch(e.target.value)} aria-label={t("common.search")} />
+        <Select value={location} onChange={(e) => setLocation(e.target.value)} aria-label={t("docs.location")}>
+          <option value="">{t("stock.allLocations")}</option>
+          {locations.data?.map((l) => (
+            <option key={l.id} value={l.id}>
+              {l.name}
+            </option>
+          ))}
+        </Select>
+        <label className="flex min-h-10 items-center gap-2 text-sm">
+          <input type="checkbox" className="h-4 w-4" checked={includeZero} onChange={(e) => setIncludeZero(e.target.checked)} />
+          {t("stock.includeZero")}
+        </label>
+      </div>
+      {rows.error && (
+        <div className="mb-4">
+          <Alert>{errorMessage(rows.error, t)}</Alert>
+        </div>
+      )}
+      <DataTable
+        data={rows.data}
+        columns={columns}
+        loading={rows.isLoading}
+        search={search}
+        searchText={(r) => `${r.product_name} ${r.product_sku} ${r.location_name}`}
+        initialSort={[{ id: "product", desc: false }]}
+        empty={t("stock.empty")}
+      />
+      {rows.data && <p className="mt-3 text-sm text-zinc-500">{t("stock.total", { value: money(total.toString()) })}</p>}
+    </>
+  );
+}

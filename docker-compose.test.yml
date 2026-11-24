@@ -1,0 +1,17 @@
+# Test runner. Uses its own database on the same Postgres server; never the live one.
+#   docker compose -f docker-compose.yml -f docker-compose.test.yml run --rm tests
+services:
+  tests:
+    build:
+      context: ./backend
+      args:
+        INSTALL_DEV: "true"
+    environment:
+      TEST_DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-bar}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-bar}_test
+      JWT_SECRET: test-secret-test-secret-test-secret-0123
+      COOKIE_SECURE: "false"
+    command: ["python", "-m", "pytest", "-q", "-p", "no:cacheprovider"]
+    depends_on:
+      db:
+        condition: service_healthy
+    profiles: ["test"]
