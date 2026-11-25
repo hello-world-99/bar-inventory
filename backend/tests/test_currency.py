@@ -5,11 +5,31 @@ from decimal import Decimal
 import pytest
 from sqlalchemy import text
 
+from app.core.config import get_settings
 from app.services import fx
 from tests.test_posting import receipt, world  # noqa: F401  (fixture)
 
 P = "/api/v1"
 GOOD = b'{"amount":1.0,"base":"USD","date":"2026-11-24","rates":{"KRW":1400.5}}'
+
+
+@pytest.fixture(autouse=True)
+def rate_fetch_on(request, monkeypatch):
+    """The fetch is off by default (owner, reply 69); these tests cover it when it is turned on."""
+    if "rate_off" not in request.keywords:
+        monkeypatch.setattr(get_settings(), "rate_auto_update", True)
+
+
+@pytest.mark.rate_off
+def test_rate_fetch_is_off_by_default(client, admin_h, monkeypatch):
+    called = []
+    monkeypatch.setattr(fx, "fetch", lambda url: called.append(url) or GOOD)
+    r = client.post(f"{P}/settings/rate/update", headers=admin_h)
+    assert r.status_code == 409 and r.json()["detail"]["code"] == "rate_disabled" and called == []
+    assert get_settings().rate_auto_update is False
+    import threading
+
+    assert not [t for t in threading.enumerate() if t.name == "fx-rate"]  # the background fetch did not start
 
 
 def settings(client, h):

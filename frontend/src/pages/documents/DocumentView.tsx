@@ -3,6 +3,7 @@ import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Link } from "react-router-dom";
 import { useAuth } from "@/auth/AuthContext";
+import { BalanceText } from "@/components/BalanceText";
 import { Modal } from "@/components/Modal";
 import { Alert, Badge, Button, Field, Input } from "@/components/ui";
 import { api, ApiError } from "@/lib/api";
@@ -143,6 +144,17 @@ export function DocumentView({ id, onClose }: { id: string; onClose: () => void 
                       <td className="px-3 py-2 text-right tabular-nums">
                         {f.main}
                         {f.alt && <div className="text-xs text-zinc-500">{f.alt}</div>}
+                        {/* the balance right after this line, per place (history, not today's stock) */}
+                        {l.balance_after_from !== null && (
+                          <div className="text-xs text-zinc-500">
+                            {l.balance_after_to !== null && `${l.location_from_name}: `}→ <BalanceText qtyBase={l.balance_after_from} unit={l} min={l.min_stock_base} />
+                          </div>
+                        )}
+                        {l.balance_after_to !== null && (
+                          <div className="text-xs text-zinc-500">
+                            {l.balance_after_from !== null && `${l.location_to_name}: `}→ <BalanceText qtyBase={l.balance_after_to} unit={l} min={l.min_stock_base} />
+                          </div>
+                        )}
                       </td>
                     </tr>
                   );

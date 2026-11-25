@@ -29,6 +29,7 @@ services:
       INITIAL_ADMIN_USERNAME: ${INITIAL_ADMIN_USERNAME:-}
       INITIAL_ADMIN_PASSWORD: ${INITIAL_ADMIN_PASSWORD:-}
       RATE_URL: ${RATE_URL:-https://api.frankfurter.dev/v1/latest?base=USD&symbols=KRW}
+      RATE_AUTO_UPDATE: ${RATE_AUTO_UPDATE:-false}
     depends_on:
       db:
         condition: service_healthy

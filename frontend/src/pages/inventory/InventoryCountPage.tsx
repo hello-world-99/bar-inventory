@@ -12,7 +12,7 @@ import { api, ApiError } from "@/lib/api";
 import { enqueue, isDefinite, loadQueue, settle, toRequest, type PendingCount } from "@/lib/countQueue";
 import { uuidv4 } from "@/lib/uuid";
 import { errorMessage } from "@/lib/errors";
-import { useDateTime, useMoney, useQty } from "@/lib/format";
+import { useDateTime, useQty } from "@/lib/format";
 import type { Inventory, InventoryLine, PendingDays, Product } from "@/lib/types";
 import { CONTAINERS, inputUnits, plain, type Unit } from "@/lib/units";
 import { DocumentView } from "../documents/DocumentView";
@@ -164,7 +164,6 @@ function LineCard({ line, editable, pending, problem, onSave, onClear }: {
 }) {
   const { t } = useTranslation();
   const qty = useQty();
-  const money = useMoney();
   const dt = useDateTime();
   const counted = line.counted_base !== null;
   const diff = line.diff_base !== null ? new Big(line.diff_base) : null;
@@ -190,7 +189,6 @@ function LineCard({ line, editable, pending, problem, onSave, onClear }: {
             <Badge tone={diff.lt(0) ? "red" : "green"}>
               {diff.gt(0) ? "+" : ""}
               {qty(line.diff_base!, line).main}
-              {line.diff_cost !== null && ` · ${money(line.diff_cost)}`}
             </Badge>
           )}
           {diff && diff.eq(0) && <Badge tone="green">{t("inventory.match")}</Badge>}
@@ -229,7 +227,6 @@ function LineCard({ line, editable, pending, problem, onSave, onClear }: {
 function CompleteDialog({ inv, onClose }: { inv: Inventory; onClose: () => void }) {
   const { t } = useTranslation();
   const qc = useQueryClient();
-  const money = useMoney();
   const [zero, setZero] = useState(false);
   const done = useMutation({
     mutationFn: () => api<Inventory>(`/inventories/${inv.id}/complete`, { method: "POST", body: { zero_uncounted: zero } }),
@@ -259,21 +256,6 @@ function CompleteDialog({ inv, onClose }: { inv: Inventory; onClose: () => void 
             </p>
           </div>
         )}
-        <dl className="grid grid-cols-3 gap-3 rounded-lg bg-zinc-50 p-3">
-          <div>
-            <dt className="text-xs text-zinc-500">{t("inventory.surplus")}</dt>
-            <dd className="font-semibold text-emerald-700">{money(inv.surplus_cost ?? "0")}</dd>
-          </div>
-          <div>
-            <dt className="text-xs text-zinc-500">{t("inventory.shortage")}</dt>
-            <dd className="font-semibold text-red-700">{money(inv.shortage_cost ?? "0")}</dd>
-          </div>
-          <div>
-            <dt className="text-xs text-zinc-500">{t("inventory.net")}</dt>
-            <dd className="font-semibold">{money(inv.net_cost ?? "0")}</dd>
-          </div>
-        </dl>
-        <p className="text-xs text-zinc-500">{t("inventory.previewNote")}</p>
         {uncounted > 0 && (
           <label className="flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 p-3">
             <input type="checkbox" className="mt-0.5 h-4 w-4" checked={zero} onChange={(e) => setZero(e.target.checked)} />
@@ -302,7 +284,6 @@ export function InventoryCountPage() {
   const { t } = useTranslation();
   const { can, user } = useAuth();
   const qc = useQueryClient();
-  const money = useMoney();
   const dt = useDateTime();
   const products = useActiveProducts().data ?? [];
   const [filter, setFilter] = useState<Filter>("all");
@@ -382,22 +363,8 @@ export function InventoryCountPage() {
       </div>
       {inv.status === "in_progress" && pending.length > 0 && can("inventory_review") && <p className="mb-3 text-xs text-amber-700">{t("inventory.syncBeforeComplete")}</p>}
 
-      {inv.status !== "in_progress" && inv.net_cost !== null && (
+      {inv.status !== "in_progress" && inv.adjustment_document_id && (
         <Card className="mb-4">
-          <dl className="grid grid-cols-3 gap-3 text-sm">
-            <div>
-              <dt className="text-xs text-zinc-500">{t("inventory.surplus")}</dt>
-              <dd className="font-semibold text-emerald-700">{money(inv.surplus_cost ?? "0")}</dd>
-            </div>
-            <div>
-              <dt className="text-xs text-zinc-500">{t("inventory.shortage")}</dt>
-              <dd className="font-semibold text-red-700">{money(inv.shortage_cost ?? "0")}</dd>
-            </div>
-            <div>
-              <dt className="text-xs text-zinc-500">{t("inventory.net")}</dt>
-              <dd className="font-semibold">{money(inv.net_cost)}</dd>
-            </div>
-          </dl>
           {inv.adjustment_document_id && (
             <Button variant="secondary" className="mt-3" onClick={() => setOpenDoc(inv.adjustment_document_id)}>
               {t("inventory.openAdjustment")}

@@ -26,7 +26,9 @@ class Settings(BaseSettings):
 
     # USD -> KRW rate source (app/services/fx.py): free, no key, HTTPS. Change it here if it ever moves.
     rate_url: str = "https://api.frankfurter.dev/v1/latest?base=USD&symbols=KRW"
-    rate_auto_update: bool = True  # the daily background fetch; tests turn it off
+    # The daily background fetch. Off by default: currency is hidden for now (owner, reply 69); RATE_AUTO_UPDATE=true
+    # brings it back together with the UI.
+    rate_auto_update: bool = False
 
 
 @lru_cache

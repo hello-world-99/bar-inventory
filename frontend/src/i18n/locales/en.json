@@ -110,31 +110,10 @@
   "settings": {
     "title": "Settings",
     "venueName": "Venue name",
-    "currency": "Currency (ISO code)",
     "timezone": "Time zone",
     "businessDayStart": "Business day starts at",
     "blindCount": "Hide expected quantities during counts",
     "blindCountHint": "A nudge toward honest counting, not a security control: staff can still see stock levels elsewhere.",
-    "currencies": {
-      "KRW": "Korean won (₩)",
-      "USD": "US dollar ($)"
-    },
-    "usdNeedsRate": "Set or update the exchange rate first.",
-    "rate": "Exchange rate (won per US dollar)",
-    "rateMode": {
-      "auto": "Automatic (updated daily)",
-      "manual": "Manual"
-    },
-    "manualRate": "₩ per $1",
-    "rateInvalid": "Enter a number between 100 and 100000.",
-    "rateValue": "$1 = ₩{{rate}}",
-    "rateFrom": "· {{source}}, {{date}}",
-    "noRate": "No rate yet. It is fetched in the background; press “Update now” to fetch it at once.",
-    "rateFailed": "Last update failed ({{when}}): {{error}}. The previous rate is kept.",
-    "updateNow": "Update now",
-    "rateHint": "All prices are stored in won. Dollars are shown and typed in at the current rate; changing the currency or the rate never changes stored numbers. Past documents are shown at today's rate too.",
-    "rateNote": "Amounts in USD at ₩{{rate}} per $1 (rate of {{date}})",
-    "updateFailed": "rate update failed",
     "businessDayHint": "Between closing and the next opening (e.g. 06:00): a count after midnight still belongs to the same day."
   },
   "units": {
@@ -183,8 +162,6 @@
     "bottleSize": "Bottle size (ml)",
     "packSize": "Pack size (g)",
     "packSizeHint": "Fixed after the first receipt or count: a pack of another size is a new product.",
-    "pricePer": "Purchase price per {{unit}}",
-    "price": "Price",
     "minStock": "Minimum stock",
     "minStockIn": "Minimum stock ({{unit}})",
     "minStockHint": "Flagged as low when total stock is at or below this level. 0 = don't track.",
@@ -208,7 +185,6 @@
       "number": "Use numbers like 12 or 12.5.",
       "packSize": "Enter the pack size in grams."
     },
-    "priceInUsd": "In dollars; saved in won at the current rate.",
     "summary_one": "{{count}} product",
     "summary_other": "{{count}} products"
   },
@@ -289,7 +265,8 @@
       "fromTo": "Choose both locations."
     },
     "per": "per",
-    "posCompensation": "Correction of a POS report after an inventory — open the report"
+    "posCompensation": "Correction of a POS report after an inventory — open the report",
+    "inStock": "In stock at {{place}}:"
   },
   "stock": {
     "allLocations": "All locations",
@@ -303,7 +280,10 @@
     "balance": "Balance after",
     "empty": "No movements match the filters.",
     "page": "Page {{page}} of {{pages}}",
-    "clearProduct": "Clear product filter"
+    "clearProduct": "Clear product filter",
+    "products": "Products",
+    "more_one": "+{{count}} more",
+    "more_other": "+{{count}} more"
   },
   "inventory": {
     "start": "Start count",
@@ -322,9 +302,6 @@
       "completed": "Completed {{when}} by {{who}}",
       "cancelled": "Cancelled {{when}} by {{who}}"
     },
-    "net": "Net result",
-    "surplus": "Surplus",
-    "shortage": "Shortage",
     "expected": "Expected",
     "counted": "Counted",
     "recount": "Recount",
@@ -346,7 +323,6 @@
     "cancel": "Cancel count",
     "completeTitle": "Complete the count at {{name}}?",
     "completeExplain": "Counted quantities become the book stock. Items that were not counted keep their current stock.",
-    "previewNote": "Figures are a preview at current prices; on completion the expected quantities are recalculated for the moment each item was counted.",
     "zeroUncounted_one": "Treat {{count}} uncounted item as zero (not found)",
     "zeroUncounted_other": "Treat {{count}} uncounted items as zero (not found)",
     "zeroUncountedHint": "Only if you are sure the shelf was checked for them.",
@@ -447,16 +423,15 @@
     "manualCorrection": "Manual correction",
     "runningOut": "running out",
     "pricePer": "Price per {{unit}}",
-    "editHint": "Quantities (in g, ml or pcs) can be corrected before writing off, prices by an administrator; the result is recalculated at once.",
+    "editHint": "Quantities (in g, ml or pcs) can be corrected before writing off; the result is recalculated at once.",
     "editUsage": "Edit usage",
     "saveCorrections": "Save corrections",
-    "correctHint": "Change quantities and prices right in the table; totals are recalculated at once. Saving reverses this day's write-off and posts the corrected one on the same date. Products already counted by an inventory keep their counted stock: the difference goes into that count's result.",
+    "correctHint": "Change the quantities right in the table. Saving reverses this day's write-off and posts the corrected one on the same date. Products already counted by an inventory keep their counted stock: the difference goes into that count's result.",
     "preparedBy": "Prepared by",
     "preparedByHint": "“Prepared by” is any name of who made the report",
     "countedAfterWrittenOff": "Counted by inventory #{{id}} on {{at}}: corrections keep the counted stock",
     "countedEdit": "Counted by an inventory after these sales: the stock after the count stays as counted; the difference moves between the sales and the count's result.",
     "chooseFile": "Choose file",
-    "noFileChosen": "No file chosen",
-    "price": "Price"
+    "noFileChosen": "No file chosen"
   }
 }

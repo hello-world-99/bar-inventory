@@ -6,7 +6,7 @@ import { Link } from "react-router-dom";
 import { Alert, Badge, Card, cn, PageHeader } from "@/components/ui";
 import { api } from "@/lib/api";
 import { errorMessage } from "@/lib/errors";
-import { useDateTime, useMoney, useQty } from "@/lib/format";
+import { useDateTime, useQty } from "@/lib/format";
 import type { Dashboard, DocSummary } from "@/lib/types";
 import { DocumentView } from "./documents/DocumentView";
 import { statusTone } from "./inventory/InventoryListPage";
@@ -14,7 +14,6 @@ import { statusTone } from "./inventory/InventoryListPage";
 /** Requirements 2.1: positions, stock value, current stock, low stock, recent receipts and write-offs, recent counts. */
 export function DashboardPage() {
   const { t } = useTranslation();
-  const money = useMoney();
   const qty = useQty();
   const dt = useDateTime();
   const [openDoc, setOpenDoc] = useState<string | null>(null);
@@ -124,12 +123,6 @@ export function DashboardPage() {
                             : `${dt(inv.closed_at ?? inv.started_at)} · ${inv.closed_by_name ?? ""}`}
                         </div>
                       </div>
-                      {inv.status === "completed" && inv.net_cost !== null && (
-                        <div className="text-right text-sm tabular-nums">
-                          <div className={cn(Number(inv.net_cost) < 0 && "text-red-700")}>{money(inv.net_cost)}</div>
-                          <div className="text-xs text-zinc-500">{t("inventory.net")}</div>
-                        </div>
-                      )}
                     </Link>
                   </li>
                 ))}

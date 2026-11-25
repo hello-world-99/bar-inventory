@@ -8,13 +8,12 @@ import { useActiveLocations } from "@/components/pickers";
 import { Alert, Input, PageHeader, Select } from "@/components/ui";
 import { api } from "@/lib/api";
 import { errorMessage } from "@/lib/errors";
-import { useMoney, useQty } from "@/lib/format";
+import { useQty } from "@/lib/format";
 import type { StockRow } from "@/lib/types";
 import { useCategoryName } from "./ProductsPage";
 
 export function StockPage() {
   const { t } = useTranslation();
-  const money = useMoney();
   const qty = useQty();
   const catName = useCategoryName();
   const locations = useActiveLocations();
@@ -58,7 +57,7 @@ export function StockPage() {
         },
       },
     ],
-    [t, qty, money, catName],
+    [t, qty, catName],
   );
 
 

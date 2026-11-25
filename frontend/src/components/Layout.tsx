@@ -23,7 +23,6 @@ import { useTranslation } from "react-i18next";
 import { NavLink, Outlet, useLocation } from "react-router-dom";
 import { useAuth } from "@/auth/AuthContext";
 import { loadQueue } from "@/lib/countQueue";
-import { useAppSettings } from "@/lib/format";
 import type { Permission } from "@/lib/types";
 import { ChangePasswordDialog } from "./ChangePassword";
 import { Modal } from "./Modal";
@@ -114,7 +113,6 @@ function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
           );
         })}
       </nav>
-      <RateNote />
       <div className="border-t border-zinc-200 p-3">
         <div className="px-2 pb-2">
           <div className="truncate text-sm font-medium">{user?.full_name || user?.username}</div>
@@ -152,19 +150,6 @@ function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
         </Modal>
       )}
     </div>
-  );
-}
-
-/** Dollars are won at the current rate (reply 34, p. 5): say which rate, and whether it is stale. */
-function RateNote() {
-  const { t } = useTranslation();
-  const s = useAppSettings().data;
-  if (!s || s.currency !== "USD" || !s.usd_krw_rate) return null;
-  return (
-    <p className={cn("px-5 pb-3 text-xs", s.rate_error ? "text-amber-700" : "text-zinc-500")}>
-      {t("settings.rateNote", { rate: Number(s.usd_krw_rate).toFixed(2), date: s.rate_date ?? s.rate_updated_at?.slice(0, 10) ?? "" })}
-      {s.rate_error ? ` — ${t("settings.updateFailed")}` : ""}
-    </p>
   );
 }
 

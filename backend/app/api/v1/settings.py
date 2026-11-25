@@ -4,6 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
+from app.core.config import get_settings
 from app.api.deps import CurrentUser, DbSession, require
 from app.core.permissions import Perm
 from app.models import AppSettings, User
@@ -57,6 +58,8 @@ def update_app_settings(body: SettingsUpdate, _: Admin, db: DbSession) -> AppSet
 @router.post("/rate/update", response_model=SettingsOut)
 def update_rate_now(_: Admin, db: DbSession) -> AppSettings:
     """Fetch the rate now (auto mode). A failure keeps the last rate; it is reported in rate_error, not as an error."""
+    if not get_settings().rate_auto_update:
+        raise HTTPException(409, {"code": "rate_disabled", "message": "Exchange rates are turned off (RATE_AUTO_UPDATE)"})
     row = load_settings(db)
     if row.rate_mode != "auto":
         raise HTTPException(422, {"code": "rate_is_manual", "message": "The rate is typed in manually; switch to automatic first"})

@@ -64,8 +64,8 @@ function rowValues(item: UsageItem, e: UsageEdit | undefined, cur: Currency) {
   return { qtyBase, price, amount, valid };
 }
 
-function UsageRow({ item, draft, editable, priceEditable, edit, onEdit }: {
-  item: UsageItem; draft: boolean; editable: boolean; priceEditable: boolean; edit: UsageEdit | undefined; onEdit: (e: UsageEdit) => void;
+function UsageRow({ item, draft, editable, edit, onEdit }: {
+  item: UsageItem; draft: boolean; editable: boolean; edit: UsageEdit | undefined; onEdit: (e: UsageEdit) => void;
 }) {
   const { t } = useTranslation();
   const qty = useQty();
@@ -131,22 +131,6 @@ function UsageRow({ item, draft, editable, priceEditable, edit, onEdit }: {
               → {qty(after.toString(), item).main}
               {low && ` · ${t("sales.runningOut")}`}
             </span>
-          )}
-        </td>
-      )}
-      {priceEditable && (
-        <td className="py-2 text-right whitespace-nowrap text-zinc-600">
-          {fixable && (
-            <label className="inline-flex items-center gap-1">
-              <Input
-                inputMode="decimal"
-                aria-label={t("sales.pricePer", { unit: t(`units.one.${item.unit}`) })}
-                className={cn("w-28 text-right", !isDec(current.price) && "border-red-400")}
-                value={current.price}
-                onChange={(e) => onEdit({ ...current, price: e.target.value.replace(",", ".") })}
-              />
-              <span className="text-xs text-zinc-500">/ {t(`units.short.${item.unit}`)}</span>
-            </label>
           )}
         </td>
       )}
@@ -328,17 +312,16 @@ function VoidDialog({ report, onClose }: { report: SalesImport; onClose: () => v
 
 /** Save corrections of a written-off report: its write-off is reversed and the corrected one posted. */
 function CorrectPanel({ report, lines, valid, onDone, onCancel }: {
-  report: SalesImport; lines: { product_id: number; qty_base: string; unit_price?: string }[]; valid: boolean; onDone: () => void; onCancel: () => void;
+  report: SalesImport; lines: { product_id: number; qty_base: string }[]; valid: boolean; onDone: () => void; onCancel: () => void;
 }) {
   const { t } = useTranslation();
   const qc = useQueryClient();
-  const cur = useCurrency();
   const [ids] = useState(() => ({ document_id: uuidv4(), reversal_id: uuidv4() })); // same ids on retry
   const save = useMutation({
     mutationFn: (allowNegative: boolean) =>
       api<SalesImport>(`/sales-imports/${report.id}/correct`, {
         method: "POST",
-        body: { ...ids, lines, price_currency: cur.code, allow_negative: allowNegative },
+        body: { ...ids, lines, allow_negative: allowNegative },
       }),
     onSuccess: () => {
       void qc.invalidateQueries();
@@ -369,9 +352,8 @@ function CorrectPanel({ report, lines, valid, onDone, onCancel }: {
 }
 
 function PostPanel({ report, locationId, lines, valid }: {
-  report: SalesImport; locationId: number | null; lines: { product_id: number; qty_base: string; unit_price?: string }[]; valid: boolean;
+  report: SalesImport; locationId: number | null; lines: { product_id: number; qty_base: string }[]; valid: boolean;
 }) {
-  const cur = useCurrency();
   const { t } = useTranslation();
   const qc = useQueryClient();
   const navigate = useNavigate();
@@ -385,7 +367,7 @@ function PostPanel({ report, locationId, lines, valid }: {
     mutationFn: (allowNegative: boolean) =>
       api<SalesImport>(`/sales-imports/${report.id}/post`, {
         method: "POST",
-        body: { document_id: docId, location_id: locationId, allow_negative: allowNegative, acknowledge_unmapped: ack, lines, price_currency: cur.code },
+        body: { document_id: docId, location_id: locationId, allow_negative: allowNegative, acknowledge_unmapped: ack, lines },
       }),
     onSuccess: done,
   });
@@ -458,8 +440,8 @@ export function SalesReportPage() {
   const allValid = r.items.every((i) => rowValues(i, edits[i.product_id], cur).valid);
   const lines = r.items
     .filter((i) => edits[i.product_id] && (i.covered_inventory_id === null || !draft))
-    // the price is sent only by admins (reply 41, P1); staff corrects quantities
-    .map((i) => ({ product_id: i.product_id, qty_base: edits[i.product_id].qty.trim(), ...(can("manage_catalog") ? { unit_price: edits[i.product_id].price.trim() } : {}) }));
+    // quantities only (owner, reply 68): no prices are sent
+    .map((i) => ({ product_id: i.product_id, qty_base: edits[i.product_id].qty.trim() }));
 
   return (
     <div>
@@ -551,7 +533,6 @@ export function SalesReportPage() {
                   <th className="py-1 pr-3">{t("sales.product")}</th>
                   <th className="py-1 pr-3 text-right">{t("sales.used")}</th>
                   {r.items[0]?.balance_base !== null && <th className="py-1 pr-3 text-right">{t("sales.onHand")}</th>}
-                  {editable && can("manage_catalog") && <th className="py-1 text-right">{t("sales.price")}</th>}
                 </tr>
               </thead>
               <tbody>
@@ -561,7 +542,6 @@ export function SalesReportPage() {
                     item={i}
                     draft={draft}
                     editable={editable}
-                    priceEditable={editable && can("manage_catalog")}
                     edit={edits[i.product_id]}
                     onEdit={(e) => setEdits((x) => ({ ...x, [i.product_id]: e }))}
                   />

@@ -71,15 +71,30 @@ def doc_out(db: Session, doc: StockDocument) -> DocOut:
         .where(StockDocumentLine.document_id == doc.id)
         .order_by(StockDocumentLine.line_no)
     ).all()
+    # The document's own movements, in posting order, matched to its lines per (product, location): the balance shown
+    # is history (right after this document), not today's stock.
+    after: dict[tuple[int, int], list[Decimal]] = {}
+    for pid, loc, bal in db.execute(
+        select(StockMovement.product_id, StockMovement.location_id, StockMovement.balance_after)
+        .where(StockMovement.document_id == doc.id).order_by(StockMovement.id)
+    ):
+        after.setdefault((pid, loc), []).append(bal)
+
+    def take(pid: int, loc: int | None) -> Decimal | None:
+        queue = after.get((pid, loc)) if loc is not None else None
+        return queue.pop(0) if queue else None
+
     lines = []
     for line, p, from_name, to_name in rows:
         amount = abs(line.qty_base) * (line.unit_cost_base or Decimal(0))
+        bal_from, bal_to = take(p.id, line.location_from_id), take(p.id, line.location_to_id)
         lines.append(
             DocLineOut(
                 line_no=line.line_no, product_id=p.id, product_name=p.name, product_sku=p.sku, unit=p.unit,
                 base_unit=p.base_unit, unit_size=p.unit_size, location_from_id=line.location_from_id,
                 location_from_name=from_name, location_to_id=line.location_to_id, location_to_name=to_name,
                 qty_base=line.qty_base, unit_price=line.unit_price, unit_cost_base=line.unit_cost_base, amount=amount,
+                balance_after_from=bal_from, balance_after_to=bal_to, min_stock_base=p.min_stock_base,
             )
         )
     return DocOut(
@@ -252,7 +267,8 @@ def journal(
     if location_id is not None:
         stmt = stmt.where(StockMovement.location_id == location_id)
     total = db.scalar(select(func.count()).select_from(stmt.order_by(None).subquery())) or 0
-    rows = db.execute(stmt.order_by(StockMovement.doc_date.desc(), StockMovement.id.desc()).limit(limit).offset(offset))
+    # document_id inside a date keeps every document's movements next to each other (the journal groups them)
+    rows = db.execute(stmt.order_by(StockMovement.doc_date.desc(), StockMovement.document_id, StockMovement.id.desc()).limit(limit).offset(offset))
     return MovementPage(
         total=total,
         items=[
@@ -260,7 +276,7 @@ def journal(
                 id=m.id, document_id=d.id, doc_type=d.type, reason=d.reason, doc_date=m.doc_date, created_at=m.created_at,
                 product_id=p.id, product_name=p.name, product_sku=p.sku, unit=p.unit, base_unit=p.base_unit,
                 unit_size=p.unit_size, location_id=m.location_id, location_name=loc, delta_base=m.delta_base,
-                balance_after=m.balance_after, unit_cost_base=m.unit_cost_base, amount=m.delta_base * m.unit_cost_base,
+                balance_after=m.balance_after, min_stock_base=p.min_stock_base, unit_cost_base=m.unit_cost_base, amount=m.delta_base * m.unit_cost_base,
                 user_name=user_name, comment=d.comment,
             )
             for m, d, p, loc, user_name in rows

@@ -8,10 +8,16 @@ import { api } from "@/lib/api";
 import { errorMessage } from "@/lib/errors";
 import { useDateTime, useQty } from "@/lib/format";
 import type { DocType, Movement, Page } from "@/lib/types";
+import { BalanceText } from "@/components/BalanceText";
 import { DocumentView } from "./documents/DocumentView";
 
 const TYPES: DocType[] = ["receipt", "write_off", "transfer", "inventory_adjustment", "reversal"];
 const PAGE = 100;
+const SHOWN = 2; // products named in a journal row; the rest are counted
+
+function Balance({ m }: { m: Movement }) {
+  return <BalanceText qtyBase={m.balance_after} unit={m} min={m.min_stock_base} />;
+}
 
 export function JournalPage() {
   const { t } = useTranslation();
@@ -35,6 +41,13 @@ export function JournalPage() {
   if (location) params.set("location_id", location);
   const q = useQuery({ queryKey: ["journal", params.toString()], queryFn: () => api<Page<Movement>>(`/journal?${params}`) });
   const pages = q.data ? Math.max(1, Math.ceil(q.data.total / PAGE)) : 1;
+  // One row per document instead of one per product movement (owner: "why does every item show a whole list?")
+  const groups: Movement[][] = [];
+  for (const m of q.data?.items ?? []) {
+    const last = groups[groups.length - 1];
+    if (last && last[0].document_id === m.document_id) last.push(m);
+    else groups.push([m]);
+  }
   const reset = <T,>(fn: (v: T) => void) => (v: T) => {
     fn(v);
     setPage(0);
@@ -77,56 +90,82 @@ export function JournalPage() {
         </div>
       )}
       <div className="overflow-x-auto rounded-xl border border-zinc-200 bg-white">
-        <table className="w-full min-w-[760px] text-sm">
+        <table className="w-full min-w-[640px] text-sm">
           <thead className="border-b border-zinc-200 text-left text-xs uppercase tracking-wide text-zinc-500">
             <tr>
               <th className="px-4 py-3 font-medium">{t("docs.date")}</th>
               <th className="px-4 py-3 font-medium">{t("journal.type")}</th>
-              <th className="px-4 py-3 font-medium">{t("products.name")}</th>
+              <th className="px-4 py-3 font-medium">{t("journal.products")}</th>
               <th className="px-4 py-3 font-medium">{t("docs.location")}</th>
-              <th className="px-4 py-3 text-right font-medium">{t("journal.change")}</th>
-              <th className="px-4 py-3 text-right font-medium">{t("journal.balance")}</th>
               <th className="px-4 py-3 font-medium">{t("docs.author")}</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-zinc-100">
             {q.isLoading && (
               <tr>
-                <td colSpan={8} className="px-4 py-8 text-center text-zinc-500">
+                <td colSpan={5} className="px-4 py-8 text-center text-zinc-500">
                   {t("common.loading")}
                 </td>
               </tr>
             )}
             {q.data?.items.length === 0 && (
               <tr>
-                <td colSpan={8} className="px-4 py-8 text-center text-zinc-500">
+                <td colSpan={5} className="px-4 py-8 text-center text-zinc-500">
                   {t("journal.empty")}
                 </td>
               </tr>
             )}
-            {q.data?.items.map((m) => {
-              const d = qty(m.delta_base, m);
-              const positive = new Big(m.delta_base).gt(0);
+            {groups.map((g, gi) => {
+              const m = g[0];
+              // a transfer moves each product out of one place and into another: name it once, places as "A → B"
+              const transfer = m.doc_type === "transfer";
+              const items = transfer ? g.filter((x) => new Big(x.delta_base).lt(0)) : g;
+              const shown = items.slice(0, SHOWN);
+              const places = transfer
+                ? [`${g.find((x) => new Big(x.delta_base).lt(0))?.location_name ?? ""} → ${g.find((x) => new Big(x.delta_base).gt(0))?.location_name ?? ""}`]
+                : Array.from(new Set(g.map((x) => x.location_name)));
               return (
-                <tr key={m.id} className="cursor-pointer hover:bg-zinc-50" onClick={() => setOpenDoc(m.document_id)}>
+                <tr key={`${m.document_id}-${gi}`} className="cursor-pointer align-top hover:bg-zinc-50" onClick={() => setOpenDoc(m.document_id)}>
                   <td className="whitespace-nowrap px-4 py-2">{dt(m.doc_date)}</td>
-                  <td className="px-4 py-2">
+                  <td className="whitespace-nowrap px-4 py-2">
                     <Badge tone={m.doc_type === "receipt" ? "green" : m.doc_type === "write_off" ? "red" : m.doc_type === "inventory_adjustment" ? "amber" : "neutral"}>
                       {t(`docTypes.${m.doc_type}`)}
                     </Badge>
-                    {m.reason && <div className="mt-0.5 text-xs text-zinc-500">{t(`reasons.${m.reason}`)}</div>}
+                    {m.reason && <span className="ml-1.5 text-xs text-zinc-500">{t(`reasons.${m.reason}`)}</span>}
                   </td>
                   <td className="px-4 py-2">
-                    <div className="font-medium">{m.product_name}</div>
-                    <div className="text-xs text-zinc-500">{m.product_sku}</div>
+                    {/* one line per document: the first products with their change, the rest as "+N more" */}
+                    <span>
+                      {shown.map((x, i) => {
+                        const positive = new Big(x.delta_base).gt(0);
+                        // a transfer: the same product's movement into the other place
+                        const into = transfer ? g.find((y) => y.product_id === x.product_id && new Big(y.delta_base).gt(0)) : undefined;
+                        return (
+                          <span key={x.id}>
+                            {i > 0 && <span className="text-zinc-400">, </span>}
+                            {x.product_name}{" "}
+                            <span className={`tabular-nums ${transfer ? "text-zinc-700" : positive ? "text-emerald-700" : "text-red-700"}`}>
+                              {positive ? "+" : ""}
+                              {transfer ? qty(new Big(x.delta_base).abs().toString(), x).main : qty(x.delta_base, x).main}
+                            </span>{" "}
+                            {/* the balance after the movement (owner, reply 72); red when running out */}
+                            {transfer ? (
+                              <span className="text-zinc-500">
+                                ({x.location_name} <Balance m={x} /> → {into?.location_name ?? ""} {into && <Balance m={into} />})
+                              </span>
+                            ) : (
+                              <span className="text-zinc-500">
+                                → <Balance m={x} />
+                              </span>
+                            )}
+                          </span>
+                        );
+                      })}
+                      {items.length > SHOWN && <span className="text-zinc-500"> {t("journal.more", { count: items.length - SHOWN })}</span>}
+                    </span>
                   </td>
-                  <td className="px-4 py-2">{m.location_name}</td>
-                  <td className={`px-4 py-2 text-right tabular-nums ${positive ? "text-emerald-700" : "text-red-700"}`}>
-                    {positive ? "+" : ""}
-                    {d.main}
-                  </td>
-                  <td className="px-4 py-2 text-right tabular-nums">{qty(m.balance_after, m).main}</td>
-                  <td className="px-4 py-2">{m.user_name}</td>
+                  <td className="whitespace-nowrap px-4 py-2">{places.join(", ")}</td>
+                  <td className="whitespace-nowrap px-4 py-2">{m.user_name}</td>
                 </tr>
               );
             })}

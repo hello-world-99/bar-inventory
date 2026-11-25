@@ -249,6 +249,8 @@ The README warns that a copy on the same disk is not a backup. Copy `backups/` e
 
 ## 10. Currency (replies 33–35)
 
+> **Hidden for now (owner, 2026-11-26, replies 68–69):** the app tracks quantities only. Prices, money totals, the currency choice and the exchange rate are not shown anywhere, and the rate fetch is off (`RATE_AUTO_UPDATE=false` by default). The code and the stored data stay, so this can come back; the section below describes it as built.
+
 **Storage.** All money is stored in **won**: prices, costs, movements and sums. Changing the currency or the rate never changes a stored number.
 
 **Display.**
@@ -329,7 +331,8 @@ Every completed count therefore still sees exactly what it saw (`Σ movements �
 
 **Example data:**
 - `python -m app.cli seed-example` — one POS day from the owner's file with a receipt.
-- `examples/pos/` — five generated days.
+- `examples/pos/` — a generated week (17–23.11), followed on the live install by the owner's own day 24.11 (`seed-example`, unchanged): kitchen items with made-up burger codes `9000xx`, weekend peaks, a few drinks.
+- `examples/load_week.py` — loads that week through the API: receipts without prices (17.11, then 19.11 and 21.11 refills), burger norms, drinks as "not kitchen", write-offs. A few products end the week in red.
 
 ## 12. Frontend
 

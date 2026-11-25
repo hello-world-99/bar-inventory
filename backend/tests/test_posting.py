@@ -354,3 +354,25 @@ def test_receipt_without_prices(client, db, admin_h, world):
     # a later priced receipt still updates the price
     receipt(client, admin_h, world, qty="1", price="15.00")
     assert Decimal(client.get(f"{P}/products/{world['vodka']}", headers=admin_h).json()["purchase_price"]) == Decimal("15.00")
+
+
+def test_journal_shows_balance_and_minimum(client, admin_h, world):
+    """Reply 72: the journal shows the balance after each movement and the product's minimum (for "running out")."""
+    client.patch(f"{P}/products/{world['lime']}", json={"min_stock_base": "500"}, headers=admin_h)
+    receipt(client, admin_h, world, qty="1", price="4", product="lime")
+    write_off(client, admin_h, world, "0.7", product="lime")
+    rows = client.get(f"{P}/journal", params={"product_id": world["lime"]}, headers=admin_h).json()["items"]
+    assert [(Decimal(r["delta_base"]), Decimal(r["balance_after"]), Decimal(r["min_stock_base"])) for r in rows] == [
+        (Decimal(-700), Decimal(300), Decimal(500)), (Decimal(1000), Decimal(1000), Decimal(500))]
+
+
+def test_document_lines_show_the_balance_after(client, admin_h, world):
+    """Reply 73: a document shows the balance right after each of its lines (history, not today's stock)."""
+    receipt(client, admin_h, world, qty="3")
+    r = client.post(f"{P}/transfers", json={"id": str(uuid.uuid4()), "from_location_id": world["main"], "to_location_id": world["bar"],
+                                             "lines": [{"product_id": world["vodka"], "qty": "1"}]}, headers=admin_h)
+    line = r.json()["lines"][0]
+    assert (Decimal(line["balance_after_from"]), Decimal(line["balance_after_to"])) == (1400, 700)
+    receipt(client, admin_h, world, qty="5")  # later documents do not change what this one shows
+    again = client.get(f"{P}/documents/{r.json()['id']}", headers=admin_h).json()["lines"][0]
+    assert Decimal(again["balance_after_from"]) == 1400

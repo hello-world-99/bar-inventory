@@ -117,6 +117,10 @@ export interface DocLine {
   unit_price: string | null;
   unit_cost_base: string | null;
   amount: string;
+  /** balance right after this line (posted documents) */
+  balance_after_from: string | null;
+  balance_after_to: string | null;
+  min_stock_base: string;
 }
 
 export interface StockDocument {
@@ -176,6 +180,7 @@ export interface Movement {
   location_name: string;
   delta_base: string;
   balance_after: string;
+  min_stock_base: string;
   unit_cost_base: string;
   amount: string;
   user_name: string;

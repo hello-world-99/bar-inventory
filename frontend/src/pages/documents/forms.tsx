@@ -1,14 +1,16 @@
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import Big from "big.js";
 import { Plus, Trash2 } from "lucide-react";
 import { useState, type FormEvent, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
+import { BalanceText } from "@/components/BalanceText";
 import { LocationSelect, ProductPicker, QtyField, useActiveLocations, useActiveProducts } from "@/components/pickers";
 import { Alert, Button, Field, Input, Select } from "@/components/ui";
 import { api, ApiError } from "@/lib/api";
 import { errorMessage } from "@/lib/errors";
 import { useAppSettings, useQty } from "@/lib/format";
 import { nowLocalIn, zonedLocalToIso } from "@/lib/tz";
-import { WRITE_OFF_REASONS, type Location, type Product, type StockDocument, type WriteOffReason } from "@/lib/types";
+import { WRITE_OFF_REASONS, type Location, type Product, type StockDocument, type StockRow, type WriteOffReason } from "@/lib/types";
 import { toBase, type Unit } from "@/lib/units";
 import { uuidv4 } from "@/lib/uuid";
 
@@ -93,9 +95,49 @@ function SubmitBar({ pending, needsNegative, needsBackdate, onSubmit, onCancel, 
   );
 }
 
-function LineRow({ line, products, locations, showLocation, onChange, onRemove, stockHint }: {
+/** Current balances by product and place, for "in stock now -> after this line" in the forms (owner, reply 73). */
+function useStockMap() {
+  const q = useQuery({ queryKey: ["stock", "map"], queryFn: () => api<StockRow[]>("/stock?include_zero=true") });
+  const map = new Map<string, StockRow>();
+  for (const r of q.data ?? []) map.set(`${r.product_id}-${r.location_id}`, r);
+  return map;
+}
+
+function StockMoves({ p, base, moves, locations }: { p: Product; base: string | null; moves: Move[]; locations: Location[] }) {
+  const { t } = useTranslation();
+  const stock = useStockMap();
+  const shown = moves.filter((m) => m.location_id !== null);
+  if (!shown.length) return null;
+  return (
+    <div className="mt-1 space-y-0.5 text-xs text-zinc-500">
+      {shown.map((m) => {
+        const now = stock.get(`${p.id}-${m.location_id}`)?.qty_base ?? "0";
+        const after = base ? new Big(now).plus(new Big(base).times(m.sign)).toString() : null;
+        const place = locations.find((l) => l.id === m.location_id)?.name ?? "";
+        return (
+          <div key={`${m.location_id}-${m.sign}`}>
+            {t("docs.inStock", { place })} <BalanceText qtyBase={now} unit={p} min={p.min_stock_base} />
+            {after !== null && (
+              <>
+                {" → "}
+                <BalanceText qtyBase={after} unit={p} min={p.min_stock_base} />
+              </>
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+interface Move {
+  location_id: number | null;
+  sign: 1 | -1;
+}
+
+function LineRow({ line, products, locations, showLocation, onChange, onRemove, stockHint, moves = [] }: {
   line: Line; products: Product[]; locations: Location[]; showLocation: boolean;
-  onChange: (l: Line) => void; onRemove?: () => void; stockHint?: ReactNode;
+  onChange: (l: Line) => void; onRemove?: () => void; stockHint?: ReactNode; moves?: Move[];
 }) {
   const { t } = useTranslation();
   const p = products.find((x) => x.id === line.product_id) ?? null;
@@ -120,6 +162,7 @@ function LineRow({ line, products, locations, showLocation, onChange, onRemove, 
       <div className={showLocation ? "sm:col-span-3" : "sm:col-span-4"}>
         <QtyField product={p} qty={line.qty} unit={line.qty_unit} onChange={(qty, qty_unit) => onChange({ ...line, qty, qty_unit })} />
         {p && base && (line.qty_unit ?? p.unit) !== p.unit && <p className="mt-1 text-xs text-zinc-500">= {fmt(base, p).main}</p>}
+        {p && <StockMoves p={p} base={base} moves={moves} locations={locations} />}
       </div>
       {onRemove && (
         <button type="button" onClick={onRemove} aria-label={t("docs.removeLine")} className="justify-self-end rounded-lg p-2 text-zinc-500 hover:bg-zinc-100 sm:col-span-1 sm:col-start-12 sm:row-start-1">
@@ -196,7 +239,7 @@ export function ReceiptForm({ onDone, onCancel }: { onDone: (d: StockDocument) =
       <div className="space-y-2">
         <h3 className="text-sm font-semibold">{t("docs.lines")}</h3>
         {lines.map((l, i) => (
-          <LineRow key={l.key} line={l} products={products} locations={locations} showLocation onChange={(x) => update(i, x)} onRemove={lines.length > 1 ? () => remove(i) : undefined} />
+          <LineRow key={l.key} moves={[{ location_id: l.location_id, sign: 1 }]} line={l} products={products} locations={locations} showLocation onChange={(x) => update(i, x)} onRemove={lines.length > 1 ? () => remove(i) : undefined} />
         ))}
         <div className="flex items-center justify-between">
           <Button variant="ghost" onClick={add}>
@@ -254,7 +297,7 @@ export function WriteOffForm({ onDone, onCancel }: { onDone: (d: StockDocument) 
       <div className="space-y-2">
         <h3 className="text-sm font-semibold">{t("docs.lines")}</h3>
         {lines.map((l, i) => (
-          <LineRow key={l.key} line={l} products={products} locations={locations} showLocation onChange={(x) => update(i, x)} onRemove={lines.length > 1 ? () => remove(i) : undefined} />
+          <LineRow key={l.key} moves={[{ location_id: l.location_id, sign: -1 }]} line={l} products={products} locations={locations} showLocation onChange={(x) => update(i, x)} onRemove={lines.length > 1 ? () => remove(i) : undefined} />
         ))}
         <Button variant="ghost" onClick={add}>
           <Plus className="h-4 w-4" /> {t("docs.addLine")}
@@ -304,7 +347,7 @@ export function TransferForm({ onDone, onCancel }: { onDone: (d: StockDocument) 
       <div className="space-y-2">
         <h3 className="text-sm font-semibold">{t("docs.lines")}</h3>
         {lines.map((l, i) => (
-          <LineRow key={l.key} line={l} products={products} locations={locations} showLocation={false} onChange={(x) => update(i, x)} onRemove={lines.length > 1 ? () => remove(i) : undefined} />
+          <LineRow key={l.key} moves={[{ location_id: from, sign: -1 }, { location_id: to, sign: 1 }]} line={l} products={products} locations={locations} showLocation={false} onChange={(x) => update(i, x)} onRemove={lines.length > 1 ? () => remove(i) : undefined} />
         ))}
         <Button variant="ghost" onClick={add}>
           <Plus className="h-4 w-4" /> {t("docs.addLine")}

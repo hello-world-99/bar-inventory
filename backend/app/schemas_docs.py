@@ -99,6 +99,10 @@ class DocLineOut(BaseModel):
     unit_price: Decimal | None
     unit_cost_base: Decimal | None
     amount: Decimal  # |qty_base| * unit_cost_base, unrounded
+    # Balance right after this line's movement (owner, reply 73: "show the balance everywhere"); None for drafts.
+    balance_after_from: Decimal | None = None
+    balance_after_to: Decimal | None = None
+    min_stock_base: Decimal = Decimal(0)
 
 
 class DocOut(BaseModel):
@@ -163,6 +167,7 @@ class MovementOut(BaseModel):
     location_name: str
     delta_base: Decimal
     balance_after: Decimal
+    min_stock_base: Decimal = Decimal(0)  # the product's minimum, to flag "running out" in the journal
     unit_cost_base: Decimal
     amount: Decimal  # signed delta * cost, unrounded
     user_name: str

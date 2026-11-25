@@ -8,7 +8,7 @@ import { Modal } from "@/components/Modal";
 import { Alert, Badge, Button, Input, PageHeader } from "@/components/ui";
 import { api } from "@/lib/api";
 import { errorMessage } from "@/lib/errors";
-import { useDateTime, useMoney } from "@/lib/format";
+import { useDateTime } from "@/lib/format";
 import type { DocSummary, DocType, Page, Permission, StockDocument } from "@/lib/types";
 import { DocumentView } from "./DocumentView";
 import { ReceiptForm, TransferForm, WriteOffForm } from "./forms";
@@ -22,7 +22,6 @@ const CONFIG: Record<"receipt" | "write_off" | "transfer", { title: string; perm
 export function DocumentsPage({ type }: { type: "receipt" | "write_off" | "transfer" }) {
   const { t } = useTranslation();
   const { can } = useAuth();
-  const money = useMoney();
   const dt = useDateTime();
   const cfg = CONFIG[type];
   const [from, setFrom] = useState("");
@@ -56,7 +55,7 @@ export function DocumentsPage({ type }: { type: "receipt" | "write_off" | "trans
       { id: "author", header: t("docs.author"), accessorFn: (d) => d.created_by_name },
     );
     return cols;
-  }, [t, dt, money, type]);
+  }, [t, dt, type]);
 
   const Form = type === "receipt" ? ReceiptForm : type === "write_off" ? WriteOffForm : TransferForm;
 

@@ -8,7 +8,7 @@ import { LocationSelect, useActiveLocations } from "@/components/pickers";
 import { Alert, Badge, Button, Card, Field, Input, PageHeader } from "@/components/ui";
 import { api, ApiError } from "@/lib/api";
 import { errorMessage } from "@/lib/errors";
-import { useDateTime, useMoney } from "@/lib/format";
+import { useDateTime } from "@/lib/format";
 import type { Inventory } from "@/lib/types";
 
 export function statusTone(s: Inventory["status"]) {
@@ -20,7 +20,6 @@ export function InventoryListPage() {
   const { can } = useAuth();
   const nav = useNavigate();
   const qc = useQueryClient();
-  const money = useMoney();
   const dt = useDateTime();
   const locations = useActiveLocations().data ?? [];
   const [starting, setStarting] = useState(false);
@@ -61,11 +60,6 @@ export function InventoryListPage() {
                 <Badge tone={statusTone(inv.status)}>{t(`inventory.status.${inv.status}`)}</Badge>
               </div>
               <p className="mt-3 text-sm text-zinc-600">{t("inventory.progress", { counted: inv.counted_count, total: inv.line_count })}</p>
-              {inv.status === "completed" && inv.net_cost !== null && (
-                <p className="mt-1 text-sm">
-                  {t("inventory.net")}: <span className={Number(inv.net_cost) < 0 ? "font-semibold text-red-700" : "font-semibold text-emerald-700"}>{money(inv.net_cost)}</span>
-                </p>
-              )}
               {inv.closed_at && inv.status !== "in_progress" && (
                 <p className="mt-1 text-xs text-zinc-500">
                   {t(`inventory.closedBy.${inv.status}`, { when: dt(inv.closed_at), who: inv.closed_by_name })}
