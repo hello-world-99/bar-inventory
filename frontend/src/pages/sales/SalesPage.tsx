@@ -22,12 +22,14 @@ function UploadCard({ defaultDate }: { defaultDate: string }) {
   const navigate = useNavigate();
   const [file, setFile] = useState<File | null>(null);
   const [day, setDay] = useState(defaultDate);
+  const { user } = useAuth();
+  const [preparedBy, setPreparedBy] = useState(user?.full_name || user?.username || "");
   const [id, setId] = useState(uuidv4); // one id per chosen file+date: a retry after a lost response is the same upload
   useEffect(() => setDay((d) => d || defaultDate), [defaultDate]);
 
   const up = useMutation({
     mutationFn: () =>
-      api<SalesImport>(`/sales-imports?${new URLSearchParams({ id, sales_date: day, file_name: file!.name })}`, {
+      api<SalesImport>(`/sales-imports?${new URLSearchParams({ id, sales_date: day, file_name: file!.name, prepared_by: preparedBy.trim() })}`, {
         method: "POST",
         body: file!,
         headers: { "Content-Type": XLSX },
@@ -46,7 +48,7 @@ function UploadCard({ defaultDate }: { defaultDate: string }) {
   };
   return (
     <Card className="mb-6 p-4">
-      <form onSubmit={submit} className="grid gap-4 sm:grid-cols-[1fr_12rem_auto] sm:items-end">
+      <form onSubmit={submit} className="grid gap-4 sm:grid-cols-[1fr_12rem_10rem_auto] sm:items-end">
         <Field label={t("sales.file")} hint={t("sales.fileHint")}>
           <Input
             type="file"
@@ -58,6 +60,9 @@ function UploadCard({ defaultDate }: { defaultDate: string }) {
             }}
             required
           />
+        </Field>
+        <Field label={t("sales.preparedBy")} hint={t("sales.preparedByHint")}>
+          <Input value={preparedBy} maxLength={100} onChange={(e) => setPreparedBy(e.target.value)} />
         </Field>
         <Field label={t("sales.salesDate")}>
           <Input
@@ -109,6 +114,7 @@ export function SalesPage() {
       { id: "location", header: t("docs.location"), accessorFn: (r) => r.location_name ?? "" },
       { id: "file", header: t("sales.file"), accessorKey: "file_name" },
       { id: "items", header: t("sales.itemsSold"), accessorFn: (r) => Number(r.total_qty) },
+      { id: "prepared", header: t("sales.preparedBy"), accessorFn: (r) => r.prepared_by ?? "" },
       { id: "by", header: t("sales.uploadedBy"), accessorFn: (r) => `${r.uploaded_by_name} · ${dt(r.uploaded_at)}` },
     ],
     [t, dt],

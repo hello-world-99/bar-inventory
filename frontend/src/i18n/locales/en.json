@@ -453,6 +453,13 @@
     "manualCorrection": "Manual correction",
     "runningOut": "running out",
     "pricePer": "Price per {{unit}}",
-    "editHint": "Quantities (in g, ml or pcs) can be corrected before writing off, prices by an administrator; the result is recalculated at once."
+    "editHint": "Quantities (in g, ml or pcs) can be corrected before writing off, prices by an administrator; the result is recalculated at once.",
+    "editUsage": "Edit usage",
+    "saveCorrections": "Save corrections",
+    "correctHint": "Change quantities and prices right in the table; totals are recalculated at once. Saving reverses this day's write-off and posts the corrected one on the same date. Products already counted by an inventory keep their counted stock: the difference goes into that count's result.",
+    "preparedBy": "Prepared by",
+    "preparedByHint": "Who made this report; any name",
+    "countedAfterWrittenOff": "Counted by inventory #{{id}} on {{at}}: corrections keep the counted stock",
+    "countedEdit": "Counted by an inventory after these sales: the stock after the count stays as counted; the difference moves between the sales and the count's result."
   }
 }

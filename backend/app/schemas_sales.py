@@ -3,7 +3,9 @@ from datetime import date, datetime
 from decimal import Decimal
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from typing import Annotated
+
+from pydantic import BaseModel, Field, StringConstraints
 
 from app.models import BaseUnit, SalesImportStatus, Unit
 from app.schemas_docs import QtyIn
@@ -33,6 +35,7 @@ class UsageItem(BaseModel):
     # Not written off: this completed inventory counted it after the sales (drafts: would be skipped).
     covered_inventory_id: int | None = None
     covered_at: datetime | None = None
+    written_off_base: Decimal | None = None  # what the write-off holds for this product (written-off reports)
     parts: list[UsagePart]
 
 
@@ -59,6 +62,7 @@ class SalesImportSummary(BaseModel):
     closed_by_name: str | None
     closed_at: datetime | None
     warning_count: int
+    prepared_by: str | None = None
 
 
 class SalesImportOut(SalesImportSummary):
@@ -91,6 +95,22 @@ class PostIn(BaseModel):
     acknowledge_unmapped: bool = False
     lines: list[PostLineIn] = Field(default_factory=list, max_length=500)
     price_currency: Literal["KRW", "USD"] = "KRW"  # of lines[].unit_price
+    prepared_by: Annotated[str, StringConstraints(strip_whitespace=True, max_length=100)] | None = None  # who made the report; None keeps it
+
+
+class CorrectIn(BaseModel):
+    """Edit a written-off report: its write-off is reversed (reversal_id) and a new one posted (document_id)."""
+
+    document_id: uuid.UUID
+    reversal_id: uuid.UUID
+    lines: list[PostLineIn] = Field(default_factory=list, max_length=500)
+    price_currency: Literal["KRW", "USD"] = "KRW"
+    allow_negative: bool = False
+    prepared_by: Annotated[str, StringConstraints(strip_whitespace=True, max_length=100)] | None = None
+
+
+class PreparedByIn(BaseModel):
+    prepared_by: Annotated[str, StringConstraints(strip_whitespace=True, max_length=100)] | None = None
 
 
 class VoidIn(BaseModel):

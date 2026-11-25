@@ -57,7 +57,7 @@ const isDec = (v: string) => /^\d+(\.\d+)?$/.test(v.trim());
 
 /** Effective quantity (base units) and amount (display currency) of a row, recalculated as the user types. */
 function rowValues(item: UsageItem, e: UsageEdit | undefined, cur: Currency) {
-  const qtyBase = e && isDec(e.qty) ? new Big(e.qty) : new Big(item.qty_base);
+  const qtyBase = e && isDec(e.qty) ? new Big(e.qty) : new Big(item.written_off_base ?? item.qty_base);
   const price = e && isDec(e.price) ? new Big(e.price) : cur.toDisplay(new Big(item.unit_cost_base).times(item.unit_size).toString());
   const amount = qtyBase.div(item.unit_size).times(price);
   const valid = !e || (isDec(e.qty) && isDec(e.price));
@@ -73,6 +73,8 @@ function UsageRow({ item, draft, editable, priceEditable, edit, onEdit }: {
   const money = useMoney();
   const dt = useDateTime();
   const covered = item.covered_inventory_id !== null;
+  // a counted product of a written-off report can be corrected too (reply 48): the count stays true
+  const fixable = !covered || (!draft && editable);
   const v = rowValues(item, edit, cur);
   const after = item.balance_base !== null ? new Big(item.balance_base).minus(v.qtyBase) : null;
   const low = after !== null && !covered && (after.lt(0) || (new Big(item.min_stock_base).gt(0) && after.lte(item.min_stock_base)));
@@ -87,10 +89,14 @@ function UsageRow({ item, draft, editable, priceEditable, edit, onEdit }: {
         {covered && (
           <div className="mt-1">
             <Badge tone="amber">
-              {t(draft ? "sales.willBeSkipped" : "sales.countedBy", { id: String(item.covered_inventory_id), at: item.covered_at ? dt(item.covered_at) : "" })}
+              {t(draft ? "sales.willBeSkipped" : item.written_off_base && new Big(item.written_off_base).gt(0) ? "sales.countedAfterWrittenOff" : "sales.countedBy", {
+                id: String(item.covered_inventory_id),
+                at: item.covered_at ? dt(item.covered_at) : "",
+              })}
             </Badge>
           </div>
         )}
+        {covered && !draft && editable && <p className="mt-1 text-xs text-amber-800">{t("sales.countedEdit")}</p>}
         <ul className="mt-1 space-y-0.5 text-xs text-zinc-500">
           {item.parts.map((p) => (
             <li key={p.pos_code || "manual"}>
@@ -100,7 +106,7 @@ function UsageRow({ item, draft, editable, priceEditable, edit, onEdit }: {
         </ul>
       </td>
       <td className="py-2 pr-3 text-right font-semibold whitespace-nowrap">
-        {editable && !covered ? (
+        {editable && fixable ? (
           <label className="inline-flex items-center gap-1">
             <Input
               inputMode="decimal"
@@ -130,7 +136,7 @@ function UsageRow({ item, draft, editable, priceEditable, edit, onEdit }: {
         </td>
       )}
       <td className="py-2 text-right whitespace-nowrap text-zinc-600">
-        {priceEditable && !covered ? (
+        {priceEditable && fixable ? (
           <div className="inline-flex flex-col items-end gap-1">
             <label className="inline-flex items-center gap-1">
               <Input
@@ -144,13 +150,61 @@ function UsageRow({ item, draft, editable, priceEditable, edit, onEdit }: {
             </label>
             <span className="font-medium text-zinc-800">= {cur.format(v.amount)}</span>
           </div>
-        ) : draft ? (
+        ) : draft || editable ? (
           cur.format(v.amount)
         ) : (
           money(item.amount)
         )}
       </td>
     </tr>
+  );
+}
+
+/** "Prepared by": free text, the person who made the report (reply 48). Changing it moves no stock. */
+function PreparedBy({ report }: { report: SalesImport }) {
+  const { t } = useTranslation();
+  const { can } = useAuth();
+  const qc = useQueryClient();
+  const [value, setValue] = useState<string | null>(null);
+  const allowed = report.status === "draft" ? can("post_write_off") : report.status !== "voided" && can("reverse_document");
+  const save = useMutation({
+    mutationFn: () => api<SalesImport>(`/sales-imports/${report.id}`, { method: "PATCH", body: { prepared_by: (value ?? "").trim() } }),
+    onSuccess: () => {
+      setValue(null);
+      void qc.invalidateQueries({ queryKey: ["sales-import", report.id] });
+      void qc.invalidateQueries({ queryKey: ["sales-imports"] });
+    },
+  });
+  return (
+    <div>
+      <dt className="text-xs text-zinc-500">{t("sales.preparedBy")}</dt>
+      <dd>
+        {value === null ? (
+          <span className="inline-flex items-center gap-2">
+            <span className="font-medium">{report.prepared_by || "—"}</span>
+            {allowed && (
+              <button type="button" className="text-xs underline" onClick={() => setValue(report.prepared_by ?? "")}>
+                {t("common.edit")}
+              </button>
+            )}
+          </span>
+        ) : (
+          <form
+            className="flex gap-1"
+            onSubmit={(e) => {
+              e.preventDefault();
+              save.mutate();
+            }}
+          >
+            <Input value={value} maxLength={100} autoFocus onChange={(e) => setValue(e.target.value)} className="min-w-0" />
+            <Button type="submit" disabled={save.isPending}>
+              {t("common.save")}
+            </Button>
+          </form>
+        )}
+        {save.error && <span className="block text-xs text-red-700">{errorMessage(save.error, t)}</span>}
+      </dd>
+    </div>
   );
 }
 
@@ -278,6 +332,48 @@ function VoidDialog({ report, onClose }: { report: SalesImport; onClose: () => v
   );
 }
 
+/** Save corrections of a written-off report: its write-off is reversed and the corrected one posted. */
+function CorrectPanel({ report, lines, valid, onDone, onCancel }: {
+  report: SalesImport; lines: { product_id: number; qty_base: string; unit_price?: string }[]; valid: boolean; onDone: () => void; onCancel: () => void;
+}) {
+  const { t } = useTranslation();
+  const qc = useQueryClient();
+  const cur = useCurrency();
+  const [ids] = useState(() => ({ document_id: uuidv4(), reversal_id: uuidv4() })); // same ids on retry
+  const save = useMutation({
+    mutationFn: (allowNegative: boolean) =>
+      api<SalesImport>(`/sales-imports/${report.id}/correct`, {
+        method: "POST",
+        body: { ...ids, lines, price_currency: cur.code, allow_negative: allowNegative },
+      }),
+    onSuccess: () => {
+      void qc.invalidateQueries();
+      onDone();
+    },
+  });
+  const detail = save.error instanceof ApiError ? save.error.detail : undefined;
+  const needsNegative = detail?.code === "insufficient_stock" && !!detail.can_override;
+  return (
+    <div className="space-y-3">
+      {save.error && <Alert>{errorMessage(save.error, t)}</Alert>}
+      <div className="flex flex-wrap gap-2">
+        {needsNegative ? (
+          <Button variant="danger" disabled={save.isPending} onClick={() => save.mutate(true)}>
+            {t("docs.postNegative")}
+          </Button>
+        ) : (
+          <Button disabled={save.isPending || !valid || lines.length === 0} onClick={() => save.mutate(false)}>
+            {t("sales.saveCorrections")}
+          </Button>
+        )}
+        <Button variant="secondary" disabled={save.isPending} onClick={onCancel}>
+          {t("common.cancel")}
+        </Button>
+      </div>
+    </div>
+  );
+}
+
 function PostPanel({ report, locationId, lines, valid }: {
   report: SalesImport; locationId: number | null; lines: { product_id: number; qty_base: string; unit_price?: string }[]; valid: boolean;
 }) {
@@ -349,6 +445,7 @@ export function SalesReportPage() {
   const [locationId, setLocationId] = useState<number | null>(rememberedLocation);
   const [openDoc, setOpenDoc] = useState<string | null>(null);
   const [voiding, setVoiding] = useState(false);
+  const [editMode, setEditMode] = useState(false); // editing a written-off report (admin)
   const [editing, setEditing] = useState<PosLine | null>(null);
   const [edits, setEdits] = useState<Record<number, UsageEdit>>({});
   const cur = useCurrency();
@@ -362,12 +459,12 @@ export function SalesReportPage() {
   if (q.error) return <Alert>{errorMessage(q.error, t)}</Alert>;
   if (!r) return <p className="text-sm text-zinc-500">{t("common.loading")}</p>;
   const draft = r.status === "draft";
-  const editable = draft && can("post_write_off");
+  const editable = (draft && can("post_write_off")) || (editMode && r.status === "posted");
   // recalculated at once from what is typed (owner, 2026-11-25)
-  const total = r.items.reduce((s, i) => s.plus(draft ? rowValues(i, edits[i.product_id], cur).amount : cur.toDisplay(i.amount)), new Big(0));
+  const total = r.items.reduce((s, i) => s.plus(draft || editable ? rowValues(i, edits[i.product_id], cur).amount : cur.toDisplay(i.amount)), new Big(0));
   const allValid = r.items.every((i) => rowValues(i, edits[i.product_id], cur).valid);
   const lines = r.items
-    .filter((i) => edits[i.product_id] && i.covered_inventory_id === null)
+    .filter((i) => edits[i.product_id] && (i.covered_inventory_id === null || !draft))
     // the price is sent only by admins (reply 41, P1); staff corrects quantities
     .map((i) => ({ product_id: i.product_id, qty_base: edits[i.product_id].qty.trim(), ...(can("manage_catalog") ? { unit_price: edits[i.product_id].price.trim() } : {}) }));
 
@@ -380,11 +477,12 @@ export function SalesReportPage() {
         <h1 className="text-xl font-semibold">{t("sales.reportTitle", { date: r.sales_date })}</h1>
         <StatusBadge status={r.status} />
       </div>
-      <dl className="mb-4 grid gap-3 text-sm sm:grid-cols-4">
+      <dl className="mb-4 grid gap-3 text-sm sm:grid-cols-5">
         <div>
           <dt className="text-xs text-zinc-500">{t("sales.file")}</dt>
           <dd className="break-all">{r.file_name || "—"}</dd>
         </div>
+        <PreparedBy report={r} />
         <div>
           <dt className="text-xs text-zinc-500">{t("sales.uploadedBy")}</dt>
           <dd>
@@ -493,8 +591,27 @@ export function SalesReportPage() {
             <PostPanel report={r} locationId={loc} lines={lines} valid={allValid} />
           </div>
         )}
-        {(r.status === "posted" || r.status === "covered") && can("reverse_document") && (
+        {editable && !draft && (
           <div className="mt-4 border-t border-zinc-100 pt-4">
+            <p className="mb-3 text-xs text-zinc-500">{t("sales.correctHint")}</p>
+            <CorrectPanel
+              report={r}
+              lines={lines}
+              valid={allValid}
+              onDone={() => {
+                setEditMode(false);
+                setEdits({});
+              }}
+              onCancel={() => {
+                setEditMode(false);
+                setEdits({});
+              }}
+            />
+          </div>
+        )}
+        {(r.status === "posted" || r.status === "covered") && can("reverse_document") && !editMode && (
+          <div className="mt-4 flex flex-wrap gap-2 border-t border-zinc-100 pt-4">
+            {r.status === "posted" && <Button onClick={() => setEditMode(true)}>{t("sales.editUsage")}</Button>}
             <Button variant="secondary" onClick={() => setVoiding(true)}>
               {t("sales.voidAndReimport")}
             </Button>

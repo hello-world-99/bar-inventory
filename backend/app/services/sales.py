@@ -40,13 +40,15 @@ from app.models import (
     SalesImportLine,
     SalesImportStatus,
     SalesImportUsage,
+    DocType,
     StockDocument,
+    StockDocumentLine,
     Unit,
     User,
     WriteOffReason,
 )
 from app.schemas_docs import ReverseIn, ReverseKey, WriteOffIn, WriteOffLineIn
-from app.schemas_sales import PostIn, VoidIn
+from app.schemas_sales import CorrectIn, PostIn, VoidIn
 from app.services import posting
 from app.services.pos_xlsx import PosLine, PosReport, content_hash, file_date_warning, parse
 from app.services.posting import error
@@ -173,7 +175,12 @@ def _match_known_codes(db: Session, report: PosReport) -> None:
     report.lines = list(merged.values())
 
 
-def upload(db: Session, user: User, import_id: uuid.UUID, sales_date: date, file_name: str, data: bytes) -> SalesImport:
+def _who(user: User) -> str:
+    return (user.full_name or user.username)[:100]
+
+
+def upload(db: Session, user: User, import_id: uuid.UUID, sales_date: date, file_name: str, data: bytes,
+           prepared_by: str | None = None) -> SalesImport:
     report = parse(data)  # ParseError -> 422 in the API
     _match_known_codes(db, report)
     chash = content_hash(report)
@@ -223,6 +230,7 @@ def upload(db: Session, user: User, import_id: uuid.UUID, sales_date: date, file
         total_revenue=report.total_revenue,
         warnings=warnings,
         uploaded_by=user.id,
+        prepared_by=(prepared_by or "").strip()[:100] or _who(user),
     )
     imp.lines = [
         SalesImportLine(line_no=i, pos_code=line.code, pos_name=line.name, qty=line.qty, revenue=line.revenue)
@@ -345,8 +353,152 @@ def post(db: Session, user: User, import_id: uuid.UUID, body: PostIn) -> SalesIm
     imp.covered_inventory_id = min((c[0] for c in covered.values()), default=None)
     imp.location_id = body.location_id
     imp.post_request_id = body.document_id
+    if body.prepared_by is not None:
+        imp.prepared_by = body.prepared_by or None
     imp.closed_by, imp.closed_at = user.id, posting.db_now(db)
     _snapshot(imp, usage)
+    db.flush()
+    return imp
+
+
+def _reverse_write_off(db: Session, user: User, imp: SalesImport, reversal_id: uuid.UUID, comment: str, what: str) -> None:
+    rev = ReverseIn(id=reversal_id, comment=comment)
+    h = posting.request_hash("reversal", ReverseKey(original=imp.write_off_id, body=rev))
+    try:
+        posting.reverse(db, user, imp.write_off_id, rev, h)
+    except HTTPException as e:
+        if isinstance(e.detail, dict) and e.detail.get("code") == "counted_after":
+            raise error(409, f"An inventory completed after this write-off already counted this stock, so the day cannot "
+                             f"be {what}. Correct the stock with a new inventory if needed.", "counted_after",
+                        **{k: v for k, v in e.detail.items() if k not in ("code", "message")}) from None
+        raise
+
+
+def _written_off(db: Session, imp: SalesImport) -> dict[int, Decimal]:
+    if imp.write_off_id is None:
+        return {}
+    rows = db.execute(select(StockDocumentLine.product_id, StockDocumentLine.qty_base).where(StockDocumentLine.document_id == imp.write_off_id))
+    return {pid: Decimal(q) for pid, q in rows}
+
+
+def correct(db: Session, user: User, import_id: uuid.UUID, body: CorrectIn) -> SalesImport:
+    """Edit a written-off report in place: its write-off is reversed and a new one posted with the corrected
+    quantities and prices, on the same date and location (owner, 2026-11-25).
+
+    A product that an inventory counted after the sales can be corrected too (owner, reply 48): the count is the
+    truth about the stock at that moment, so the stock after it must not change. The difference d = new - old of
+    such a product is written off at the start of the day as usual and returned by a compensating adjustment dated
+    at the count (the earliest affected count, which is not later than any of them): the stock changes only
+    between the sales and the count, and the count's shortage shrinks by d.
+    """
+    imp = _lock(db, import_id)
+    if imp.status == SalesImportStatus.posted and imp.post_request_id == body.document_id:
+        return imp  # retry of the same request
+    if imp.status != SalesImportStatus.posted:
+        raise error(409, f"Only a written-off report can be corrected (this one is {imp.status.value})", "not_posted",
+                    status=imp.status.value)
+    if db.get(StockDocument, body.document_id) is not None:
+        raise error(409, "A different document with this id already exists", "id_conflict")
+    if body.prepared_by is not None:
+        imp.prepared_by = body.prepared_by or None
+    if not body.lines:
+        db.flush()
+        return imp  # only the signature changed: no reversal for that
+
+    usage = compute_usage(db, imp)  # the frozen snapshot, earlier corrections and costs included
+    current = usage.totals()
+    pids = {p.product_id for p in usage.parts}
+    old_cost = {p.product_id: p.unit_cost_base for p in usage.parts if p.unit_cost_base is not None}
+    old = _written_off(db, imp)
+    target = dict(old)  # what the new write-off holds: as before, except the corrected products
+    priced = any(x.unit_price is not None for x in body.lines)
+    rate = posting.usd_rate(db) if body.price_currency == "USD" and priced else None
+    price_in: dict[int, Decimal] = {}
+    for x in body.lines:
+        if x.product_id not in pids:
+            raise error(422, "A corrected product is not part of this report", "unknown_product", product_ids=[x.product_id])
+        delta = (x.qty_base - current.get(x.product_id, Decimal(0))).quantize(QTY_QUANT)
+        if delta != 0:
+            usage.parts.append(Part("", "Manual correction", Decimal(0), x.product_id, Decimal(0), delta))
+        target[x.product_id] = x.qty_base.quantize(QTY_QUANT)
+        if x.unit_price is not None:
+            price_in[x.product_id] = posting.to_won(x.unit_price, rate)
+    target = {pid: q for pid, q in target.items() if q > 0}
+    if not target:
+        raise error(422, "Nothing would be written off; to cancel the whole day use Void", "nothing_to_write_off")
+
+    moment = day_start(db, imp.sales_date)
+    loc = imp.location_id
+    involved = set(target) | set(old)
+    # lock order as everywhere: products FOR SHARE, then balances; coverage is decided under these locks
+    products = posting._lock_products(db, involved)
+    posting._lock_balances(db, [(pid, loc) for pid in involved])
+    covered = covered_pairs(db, moment, loc, involved)
+    costs = {
+        pid: (price_in[pid] / products[pid].unit_size).quantize(posting.COST_QUANT) if pid in price_in
+        else old_cost[pid] if pid in old_cost else posting.current_cost(products[pid])
+        for pid in involved
+    }
+    comp = {pid: (target.get(pid, Decimal(0)) - old.get(pid, Decimal(0))).quantize(QTY_QUANT) for pid in involved if pid in covered}
+    comp = {pid: d for pid, d in comp.items() if d != 0}
+
+    # 1. reverse the old write-off (its counted pairs are compensated below, so the absorption check is skipped)
+    rev = ReverseIn(id=body.reversal_id, comment=f"Correction of POS sales {imp.sales_date.isoformat()}")
+    posting.reverse(db, user, imp.write_off_id, rev, posting.request_hash("reversal", ReverseKey(original=imp.write_off_id, body=rev)),
+                    check_absorbed=False)
+    # 2. compensation at the count: posted before the new write-off so the running balance never dips falsely
+    if comp:
+        at = min(covered[pid][1] for pid in comp)
+        inv_ids = sorted({covered[pid][0] for pid in comp})
+        doc = StockDocument(
+            id=uuid.uuid5(body.document_id, "compensation"),
+            type=DocType.inventory_adjustment,
+            doc_date=at,
+            comment=f"Correction of POS sales {imp.sales_date.isoformat()} after inventory "
+                    + ", ".join(f"#{i}" for i in inv_ids) + ": the counted stock stays as counted",
+            created_by=user.id,
+            allow_negative=False,
+            sales_import_id=imp.id,
+        )
+        doc.lines = [
+            StockDocumentLine(line_no=i, product_id=pid, location_from_id=None if d > 0 else loc, location_to_id=loc if d > 0 else None,
+                              qty_base=d, unit_cost_base=costs[pid])
+            for i, (pid, d) in enumerate(sorted(comp.items()), 1)
+        ]
+        posting._post(db, user, doc, [posting.Delta(pid, loc, d, costs[pid]) for pid, d in sorted(comp.items())], check_negative=False)
+    # 3. the corrected write-off
+    wo = WriteOffIn(
+        id=body.document_id,
+        doc_date=moment,
+        comment=f"POS sales {imp.sales_date.isoformat()} (corrected)" + (f", file {imp.file_name}" if imp.file_name else ""),
+        reason=WriteOffReason.sales,
+        allow_negative=body.allow_negative,
+        lines=[
+            WriteOffLineIn(product_id=pid, qty=qty, qty_unit=Unit(products[pid].base_unit.value), location_id=loc)
+            for pid, qty in sorted(target.items())
+        ],
+    )
+    new = posting.post_write_off(db, user, wo, posting.request_hash("sales_write_off", wo), pre_check=lambda _pairs: None,
+                                 cost_overrides={pid: costs[pid] for pid in target})
+    for p in usage.parts:
+        if p.product_id in target:
+            p.unit_cost_base = costs[p.product_id]
+        if p.product_id in covered:
+            p.covered_inventory_id, p.covered_at = covered[p.product_id]
+    imp.write_off_id = new.id
+    imp.post_request_id = body.document_id
+    imp.closed_by, imp.closed_at = user.id, posting.db_now(db)
+    _snapshot(imp, usage)
+    db.flush()
+    return imp
+
+
+def set_prepared_by(db: Session, user: User, import_id: uuid.UUID, prepared_by: str | None) -> SalesImport:
+    """Sign a report without touching the stock: drafts by whoever may post, closed reports by an admin."""
+    imp = _lock(db, import_id)
+    if imp.status != SalesImportStatus.draft and not has_perm(user.role, Perm.reverse_document):
+        raise error(403, "Only an administrator can change the signature of a closed report", "forbidden")
+    imp.prepared_by = prepared_by or None
     db.flush()
     return imp
 
@@ -356,16 +508,7 @@ def void(db: Session, user: User, import_id: uuid.UUID, body: VoidIn) -> SalesIm
     if imp.status == SalesImportStatus.voided:
         return imp
     if imp.status == SalesImportStatus.posted:
-        rev = ReverseIn(id=body.reversal_id, comment=f"Void of POS sales {imp.sales_date.isoformat()}")
-        h = posting.request_hash("reversal", ReverseKey(original=imp.write_off_id, body=rev))
-        try:
-            posting.reverse(db, user, imp.write_off_id, rev, h)
-        except HTTPException as e:
-            if isinstance(e.detail, dict) and e.detail.get("code") == "counted_after":
-                raise error(409, "An inventory completed after this write-off already counted this stock, so the day cannot "
-                                 "be voided. Correct the stock with a new inventory if needed.", "counted_after",
-                            **{k: v for k, v in e.detail.items() if k not in ("code", "message")}) from None
-            raise
+        _reverse_write_off(db, user, imp, body.reversal_id, f"Void of POS sales {imp.sales_date.isoformat()}", "voided")
     imp.status = SalesImportStatus.voided
     imp.closed_by, imp.closed_at = user.id, posting.db_now(db)
     db.flush()

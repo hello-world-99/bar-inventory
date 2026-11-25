@@ -61,6 +61,8 @@ class StockDocument(Base):
     request_hash: Mapped[str | None] = mapped_column(String(64))
     # Receipt prices entered in dollars: the won-per-dollar rate they were converted at (reply 34).
     price_rate: Mapped[Decimal | None] = mapped_column(Numeric(12, 4))
+    # Compensation of a POS report corrected after an inventory counted the stock (reply 48).
+    sales_import_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("sales_imports.id"))
     created_by: Mapped[int] = mapped_column(ForeignKey("users.id"))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     posted_by: Mapped[int | None] = mapped_column(ForeignKey("users.id"))

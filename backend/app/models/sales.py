@@ -67,7 +67,8 @@ class SalesImport(Base):
     location_id: Mapped[int | None] = mapped_column(ForeignKey("locations.id"))  # set when posted or covered
     write_off_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("stock_documents.id"), unique=True)
     covered_inventory_id: Mapped[int | None] = mapped_column(ForeignKey("inventories.id"))  # first covering inventory
-    post_request_id: Mapped[uuid.UUID | None] = mapped_column(Uuid)  # document_id of the post request (idempotent retry)
+    post_request_id: Mapped[uuid.UUID | None] = mapped_column(Uuid)
+    prepared_by: Mapped[str | None] = mapped_column(String(100))  # free text: the person who made the report (reply 48)  # document_id of the post request (idempotent retry)
     uploaded_by: Mapped[int] = mapped_column(ForeignKey("users.id"))
     uploaded_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     closed_by: Mapped[int | None] = mapped_column(ForeignKey("users.id"))  # who posted / covered / voided

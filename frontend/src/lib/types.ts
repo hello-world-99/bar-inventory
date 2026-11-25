@@ -289,6 +289,8 @@ export interface SalesImportSummary {
   closed_by_name: string | null;
   closed_at: string | null;
   warning_count: number;
+  /** free text: who made the report */
+  prepared_by: string | null;
 }
 
 export interface UsagePart {
@@ -312,6 +314,8 @@ export interface UsageItem extends UnitInfo {
   /** not written off: this completed inventory counted it after the sales (drafts: will be skipped) */
   covered_inventory_id: number | null;
   covered_at: string | null;
+  /** what the write-off holds for this product (written-off reports) */
+  written_off_base: string | null;
   parts: UsagePart[];
 }
 

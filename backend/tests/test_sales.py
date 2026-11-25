@@ -509,3 +509,146 @@ def test_staff_may_correct_quantities_without_prices(client, db, admin_h, staff_
     r = post(client, staff_h, rep, kitchen["loc"], acknowledge_unmapped=True, lines=[{"product_id": kitchen["KIT-FRIES"], "qty_base": "2000"}])
     assert r.status_code == 200, r.text
     assert balance(db, kitchen["KIT-FRIES"], kitchen["loc"]) == 8000
+
+
+def test_a_written_off_report_can_be_edited_in_place(client, db, admin_h, staff_h, kitchen):
+    """Owner, 2026-11-25: edit the usage right on the page, also after writing off."""
+    stock_up(client, admin_h, kitchen, FULL_STOCK)
+    rep = upload(client, staff_h).json()
+    done = post(client, staff_h, rep, kitchen["loc"], acknowledge_unmapped=True).json()
+    first_doc = done["write_off_id"]
+    body = {"document_id": str(uuid.uuid4()), "reversal_id": str(uuid.uuid4()),
+            "lines": [{"product_id": kitchen["KIT-FRIES"], "qty_base": "1800", "unit_price": "6000"}, {"product_id": kitchen["KIT-FISH"], "qty_base": "0"}]}
+    assert client.post(f"{P}/sales-imports/{rep['id']}/correct", json=body, headers=staff_h).status_code == 403  # admin only
+    r = client.post(f"{P}/sales-imports/{rep['id']}/correct", json=body, headers=admin_h)
+    assert r.status_code == 200, r.text
+    fixed = r.json()
+    assert fixed["status"] == "posted" and fixed["write_off_id"] != first_doc
+    used = by_sku(fixed)
+    assert used["KIT-FRIES"] == 1800 and "KIT-FISH" not in used and used["KIT-WINGS"] == 600
+    fries = next(i for i in fixed["items"] if i["product_sku"] == "KIT-FRIES")
+    assert Decimal(fries["amount"]) == Decimal("10800")  # 1800 g x 6 per g
+    assert balance(db, kitchen["KIT-FRIES"], kitchen["loc"]) == 10000 - 1800
+    assert balance(db, kitchen["KIT-FISH"], kitchen["loc"]) == FULL_STOCK["KIT-FISH"]
+    assert balance(db, kitchen["KIT-WINGS"], kitchen["loc"]) == FULL_STOCK["KIT-WINGS"] - 600
+    assert client.get(f"{P}/documents/{first_doc}", headers=admin_h).json()["reversed_by"]
+    # a retry is the same request; a second correction works on top of the first
+    assert client.post(f"{P}/sales-imports/{rep['id']}/correct", json=body, headers=admin_h).json()["write_off_id"] == fixed["write_off_id"]
+    again = {"document_id": str(uuid.uuid4()), "reversal_id": str(uuid.uuid4()), "lines": [{"product_id": kitchen["KIT-FISH"], "qty_base": "3"}]}
+    r = client.post(f"{P}/sales-imports/{rep['id']}/correct", json=again, headers=admin_h)
+    assert r.status_code == 200 and by_sku(r.json())["KIT-FISH"] == 3 and by_sku(r.json())["KIT-FRIES"] == 1800
+    assert balance(db, kitchen["KIT-FISH"], kitchen["loc"]) == FULL_STOCK["KIT-FISH"] - 3
+    assert_journal_consistent(db)
+    # and the corrected day can still be voided as a whole
+    v = client.post(f"{P}/sales-imports/{rep['id']}/void", json={"reversal_id": str(uuid.uuid4())}, headers=admin_h)
+    assert v.status_code == 200 and balance(db, kitchen["KIT-FRIES"], kitchen["loc"]) == 10000
+
+
+
+
+
+def _stock_at(db, product, location, moment):
+    return Decimal(db.execute(text("SELECT coalesce(sum(delta_base), 0) FROM stock_movements WHERE product_id=:p AND location_id=:l AND doc_date <= :m"),
+                              {"p": product, "l": location, "m": moment}).scalar())
+
+
+def _count(db, inv_id, product):
+    """(counted_at, expected_at_count_base, completed_at) of an inventory line."""
+    return db.execute(text("SELECT l.counted_at, l.expected_at_count_base, i.completed_at FROM inventory_lines l "
+                           "JOIN inventories i ON i.id = l.inventory_id WHERE l.inventory_id=:i AND l.product_id=:p"),
+                      {"i": inv_id, "p": product}).one()
+
+
+def _count_unchanged(db, inv_id, product, location, counted):
+    """The count stays true: at the counting moment the stock is still what the count expected, and after the
+    count's adjustment (dated at completion) it is what was counted."""
+    at, expected, done = _count(db, inv_id, product)
+    assert _stock_at(db, product, location, at) == expected
+    assert _stock_at(db, product, location, done) == counted
+
+
+def test_correction_after_a_count_keeps_the_counted_stock(client, db, admin_h, staff_h, kitchen):
+    """Reply 48 (owner: "make it correctable"); S6 of reply 45: fish zeroed at posting, counted, then raised to 4.
+    The write-off changes at the start of the day, a compensation at the count keeps the counted stock true."""
+    stock_up(client, admin_h, kitchen, FULL_STOCK)
+    rep = upload(client, staff_h).json()
+    r = post(client, admin_h, rep, kitchen["loc"], acknowledge_unmapped=True, lines=[{"product_id": kitchen["KIT-FISH"], "qty_base": "0"}])
+    assert r.status_code == 200, r.text
+    inv = start(client, admin_h, {"main": kitchen["loc"]}, "main")
+    assert count(client, admin_h, inv, kitchen["KIT-FISH"], [(16, "pcs")]).status_code == 200
+    assert complete(client, admin_h, inv).status_code == 200
+    body = {"document_id": str(uuid.uuid4()), "reversal_id": str(uuid.uuid4()), "lines": [{"product_id": kitchen["KIT-FISH"], "qty_base": "4"}]}
+    c = client.post(f"{P}/sales-imports/{rep['id']}/correct", json=body, headers=admin_h)
+    assert c.status_code == 200, c.text
+    fish = next(i for i in c.json()["items"] if i["product_sku"] == "KIT-FISH")
+    assert Decimal(fish["written_off_base"]) == 4 and fish["covered_inventory_id"] == inv["id"]
+    _count_unchanged(db, inv["id"], kitchen["KIT-FISH"], kitchen["loc"], 16)
+    at = _count(db, inv["id"], kitchen["KIT-FISH"])[0]
+    assert balance(db, kitchen["KIT-FISH"], kitchen["loc"]) == 16  # and so does the stock now
+    doc = client.get(f"{P}/documents/{c.json()['write_off_id']}", headers=admin_h).json()
+    at_start = db.execute(text("SELECT sum(delta_base) FROM stock_movements WHERE product_id=:p AND doc_date = :d"),
+                          {"p": kitchen["KIT-FISH"], "d": doc["doc_date"]}).scalar()
+    assert at_start == -4  # the 4 sales now leave at the start of the day, before the count
+    comp = db.execute(text("SELECT type, doc_date, (SELECT sum(qty_base) FROM stock_document_lines WHERE document_id = d.id) "
+                           "FROM stock_documents d WHERE sales_import_id = :i"), {"i": rep["id"]}).all()
+    assert len(comp) == 1 and comp[0][0] == "inventory_adjustment" and comp[0][1] == at and comp[0][2] == 4
+    assert_journal_consistent(db)
+    # the retry is the same request
+    assert client.post(f"{P}/sales-imports/{rep['id']}/correct", json=body, headers=admin_h).json()["write_off_id"] == c.json()["write_off_id"]
+
+
+def test_correcting_products_written_off_and_then_counted(client, db, admin_h, staff_h, kitchen):
+    """S7 of reply 45 is now allowed: fries written off, then counted; fries and an uncounted product corrected."""
+    stock_up(client, admin_h, kitchen, FULL_STOCK)
+    rep = upload(client, staff_h).json()
+    assert post(client, staff_h, rep, kitchen["loc"], acknowledge_unmapped=True).status_code == 200
+    inv = start(client, admin_h, {"main": kitchen["loc"]}, "main")
+    count(client, admin_h, inv, kitchen["KIT-FRIES"], [(7900, "g")])  # 75 g short besides the sales
+    assert complete(client, admin_h, inv).status_code == 200
+    body = {"document_id": str(uuid.uuid4()), "reversal_id": str(uuid.uuid4()),
+            "lines": [{"product_id": kitchen["KIT-FRIES"], "qty_base": "2100"}, {"product_id": kitchen["KIT-WINGS"], "qty_base": "500"}]}
+    c = client.post(f"{P}/sales-imports/{rep['id']}/correct", json=body, headers=admin_h)
+    assert c.status_code == 200, c.text
+    assert balance(db, kitchen["KIT-FRIES"], kitchen["loc"]) == 7900  # counted fries stay as counted
+    _count_unchanged(db, inv["id"], kitchen["KIT-FRIES"], kitchen["loc"], 7900)
+    assert balance(db, kitchen["KIT-WINGS"], kitchen["loc"]) == 5000 - 500  # not counted: changes as usual
+    used = {i["product_sku"]: Decimal(i["written_off_base"]) for i in c.json()["items"]}
+    assert used["KIT-FRIES"] == 2100 and used["KIT-WINGS"] == 500
+    assert_journal_consistent(db)
+
+
+def test_products_skipped_at_posting_can_be_written_off_later(client, db, admin_h, staff_h, kitchen):
+    """A product covered at posting (never written off) moves from the count's shortage into the sales."""
+    stock_up(client, admin_h, kitchen, FULL_STOCK)
+    inv = start(client, admin_h, {"main": kitchen["loc"]}, "main")
+    count(client, admin_h, inv, kitchen["KIT-FRIES"], [(7975, "g")])
+    complete(client, admin_h, inv)
+    rep = upload(client, staff_h).json()
+    done = post(client, staff_h, rep, kitchen["loc"], acknowledge_unmapped=True).json()
+    assert Decimal(next(i for i in done["items"] if i["product_sku"] == "KIT-FRIES")["written_off_base"]) == 0
+    body = {"document_id": str(uuid.uuid4()), "reversal_id": str(uuid.uuid4()), "lines": [{"product_id": kitchen["KIT-FRIES"], "qty_base": "2025"}]}
+    c = client.post(f"{P}/sales-imports/{rep['id']}/correct", json=body, headers=admin_h)
+    assert c.status_code == 200, c.text
+    assert balance(db, kitchen["KIT-FRIES"], kitchen["loc"]) == 7975
+    assert Decimal(next(i for i in c.json()["items"] if i["product_sku"] == "KIT-FRIES")["written_off_base"]) == 2025
+    assert_journal_consistent(db)
+
+
+def test_who_prepared_the_report(client, db, admin_h, staff_h, kitchen, staff):
+    """Reply 48, Z2: a free-text signature, the user's name by default."""
+    rep = upload(client, staff_h).json()
+    assert rep["prepared_by"] == "staff"
+    r = client.patch(f"{P}/sales-imports/{rep['id']}", json={"prepared_by": "  Kim Minji  "}, headers=staff_h)
+    assert r.status_code == 200 and r.json()["prepared_by"] == "Kim Minji"
+    assert client.get(f"{P}/sales-imports", headers=staff_h).json()["items"][0]["prepared_by"] == "Kim Minji"
+    stock_up(client, admin_h, kitchen, FULL_STOCK)
+    post(client, staff_h, rep, kitchen["loc"], acknowledge_unmapped=True, prepared_by="Park")
+    assert client.get(f"{P}/sales-imports/{rep['id']}", headers=staff_h).json()["prepared_by"] == "Park"
+    assert client.patch(f"{P}/sales-imports/{rep['id']}", json={"prepared_by": "X"}, headers=staff_h).status_code == 403
+    docs_before = db.execute(text("SELECT count(*) FROM stock_documents")).scalar()
+    r = client.patch(f"{P}/sales-imports/{rep['id']}", json={"prepared_by": "Lee"}, headers=admin_h)
+    assert r.status_code == 200 and r.json()["prepared_by"] == "Lee"
+    assert db.execute(text("SELECT count(*) FROM stock_documents")).scalar() == docs_before  # no reversal for a signature
+    r = client.post(f"{P}/sales-imports", params={"id": str(uuid.uuid4()), "sales_date": "2026-01-01", "prepared_by": "x" * 101},
+                    content=DAY_FILE, headers=staff_h | {"Content-Type": XLSX})
+    assert r.status_code == 422

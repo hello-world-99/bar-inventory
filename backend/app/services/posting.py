@@ -384,7 +384,9 @@ def post_transfer(db: Session, user: User, body: TransferIn, req_hash: str) -> S
                  pre_check=_backdate_hook(db, user, doc, body.confirm_backdate))
 
 
-def reverse(db: Session, user: User, original_id: uuid.UUID, body: ReverseIn, req_hash: str) -> StockDocument:
+def reverse(db: Session, user: User, original_id: uuid.UUID, body: ReverseIn, req_hash: str, *,
+            check_absorbed: bool = True) -> StockDocument:
+    """check_absorbed=False only for a caller that compensates the absorbed pairs itself (POS correction, reply 48)."""
     orig = db.get(StockDocument, original_id, with_for_update=True)  # serializes concurrent reversals
     if orig is None:
         raise error(404, "Document not found", "not_found")
@@ -451,4 +453,4 @@ def reverse(db: Session, user: User, original_id: uuid.UUID, body: ReverseIn, re
     )
     doc.lines = lines
     return _post(db, user, doc, deltas, check_negative=True, allow_negative_requested=body.allow_negative,
-                 pre_check=absorbed_by_inventory)
+                 pre_check=absorbed_by_inventory if check_absorbed else None)

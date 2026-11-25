@@ -30,11 +30,13 @@ from app.models import (
 )
 from app.schemas_sales import (
     ComponentOut,
+    CorrectIn,
     NotKitchenIn,
     PendingDays,
     PosItemIn,
     PosItemOut,
     PosLineOut,
+    PreparedByIn,
     PostIn,
     SalesImportList,
     SalesImportOut,
@@ -91,7 +93,7 @@ def _summaries(db: Session, *where, limit: int = 200) -> list[SalesImportSummary
             id=i.id, sales_date=i.sales_date, status=i.status, file_name=i.file_name, total_qty=i.total_qty,
             total_revenue=i.total_revenue, location_id=i.location_id, location_name=loc, write_off_id=i.write_off_id,
             uploaded_by_name=up_name, uploaded_at=i.uploaded_at, closed_by_name=cl_name, closed_at=i.closed_at,
-            warning_count=len(i.warnings or []),
+            warning_count=len(i.warnings or []), prepared_by=i.prepared_by,
         )
         for i, up_name, cl_name, loc in rows
     ]
@@ -119,6 +121,7 @@ def _report(db: Session, imp: SalesImport, location_id: int | None = None) -> Sa
         balances = dict(db.execute(
             select(StockBalance.product_id, StockBalance.qty_base).where(StockBalance.location_id == loc, StockBalance.product_id.in_(by_product))
         ).all())
+    written = sales._written_off(db, imp) if imp.status == SalesImportStatus.posted else {}
     items = []
     for pid, parts in by_product.items():
         p = products[pid]
@@ -133,6 +136,7 @@ def _report(db: Session, imp: SalesImport, location_id: int | None = None) -> Sa
             balance_base=balances.get(pid, Decimal(0)) if loc is not None else None, parts=parts, min_stock_base=p.min_stock_base,
             covered_inventory_id=(frozen_cover.get(pid) or covered.get(pid) or (None, None))[0],
             covered_at=(frozen_cover.get(pid) or covered.get(pid) or (None, None))[1],
+            written_off_base=written.get(pid, Decimal(0)) if imp.status == SalesImportStatus.posted else None,
         ))
     items.sort(key=lambda x: x.product_name.lower())
     codes = dict(db.execute(select(PosItem.code, PosItem.id).where(PosItem.code.in_([line.pos_code for line in imp.lines]))).all())
@@ -181,10 +185,11 @@ def upload_import(
     id: Annotated[uuid.UUID, Query()],  # noqa: A002
     sales_date: Annotated[date, Query()],
     file_name: Annotated[str, Query(max_length=255)] = "",
+    prepared_by: Annotated[str, Query(max_length=100)] = "",
 ) -> SalesImportOut:
     existed = db.get(SalesImport, id) is not None
     try:
-        imp = _run(db, lambda: sales.upload(db, user, id, sales_date, file_name.strip(), data))
+        imp = _run(db, lambda: sales.upload(db, user, id, sales_date, file_name.strip(), data, prepared_by))
     except IntegrityError as e:  # a concurrent upload won the race for the day, the content or the id
         db.rollback()
         name = constraint_name(e)
@@ -219,6 +224,20 @@ def get_import(import_id: uuid.UUID, _: Viewer, db: DbSession, location_id: int 
 @router.post("/sales-imports/{import_id}/post", response_model=SalesImportOut)
 def post_import(import_id: uuid.UUID, body: PostIn, user: Poster, db: DbSession) -> SalesImportOut:
     imp = _run(db, lambda: sales.post(db, user, import_id, body))
+    return _report(db, imp)
+
+
+@router.post("/sales-imports/{import_id}/correct", response_model=SalesImportOut)
+def correct_import(import_id: uuid.UUID, body: CorrectIn, user: Admin, db: DbSession) -> SalesImportOut:
+    """Edit quantities and prices of a written-off report (reverses its write-off and posts the corrected one)."""
+    imp = _run(db, lambda: sales.correct(db, user, import_id, body))
+    return _report(db, imp)
+
+
+@router.patch("/sales-imports/{import_id}", response_model=SalesImportOut)
+def sign_import(import_id: uuid.UUID, body: PreparedByIn, user: Poster, db: DbSession) -> SalesImportOut:
+    """Who prepared the report (free text); no stock change."""
+    imp = _run(db, lambda: sales.set_prepared_by(db, user, import_id, body.prepared_by))
     return _report(db, imp)
 
 
