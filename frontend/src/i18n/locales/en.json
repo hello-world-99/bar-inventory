@@ -70,8 +70,6 @@
   },
   "dashboard": {
     "title": "Dashboard",
-    "stockValue": "Stock value",
-    "stockValueHint": "At current purchase prices",
     "products": "Products",
     "inStock_one": "{{count}} in stock",
     "inStock_other": "{{count}} in stock",
@@ -199,20 +197,20 @@
     "noStock": "No stock recorded yet.",
     "total": "Total",
     "inStock": "In stock",
-    "value": "Stock value",
     "low": "Low stock",
     "lowOnly": "Low stock only",
     "allCategories": "All categories",
     "searchPlaceholder": "Search name, SKU or barcode…",
     "empty": "No products yet.",
-    "summary": "{{count}} products · stock value {{value}}",
     "deactivateWarning": "This product still has stock. Deactivating hides it from selection lists; its history is kept.",
     "errors": {
       "bottleSize": "Enter the bottle size in ml.",
       "number": "Use numbers like 12 or 12.5.",
       "packSize": "Enter the pack size in grams."
     },
-    "priceInUsd": "In dollars; saved in won at the current rate."
+    "priceInUsd": "In dollars; saved in won at the current rate.",
+    "summary_one": "{{count}} product",
+    "summary_other": "{{count}} products"
   },
   "locations": {
     "new": "New location",
@@ -260,7 +258,6 @@
     "lines": "Items",
     "location": "Location",
     "qty": "Quantity",
-    "amount": "Amount",
     "unitPrice": "Price per unit",
     "addLine": "Add item",
     "removeLine": "Remove item",
@@ -288,17 +285,16 @@
       "product": "Choose a product in every item.",
       "location": "Choose a location in every item.",
       "qty": "Enter a positive quantity in every item.",
-      "price": "Enter a price in every item.",
       "reason": "Choose a reason.",
       "fromTo": "Choose both locations."
     },
-    "per": "per"
+    "per": "per",
+    "posCompensation": "Correction of a POS report after an inventory — open the report"
   },
   "stock": {
     "allLocations": "All locations",
     "includeZero": "Show zero balances",
-    "empty": "No stock yet.",
-    "total": "Total stock value: {{value}}"
+    "empty": "No stock yet."
   },
   "journal": {
     "type": "Operation",
@@ -421,15 +417,13 @@
     "product": "Product",
     "used": "Used",
     "onHand": "On hand → after",
-    "cost": "Cost",
-    "total": "Total",
     "ackUnmapped_one": "Write off without the {{count}} item that has no norm",
     "ackUnmapped_other": "Write off without the {{count}} items that have no norm",
     "writeOff": "Write off from stock",
     "discard": "Delete this upload",
     "voidAndReimport": "Void & re-import",
     "voidTitle": "Void POS sales of {{date}}",
-    "voidExplainPosted": "The write-off is reversed (stock comes back) and the day can be uploaded again.",
+    "voidExplainPosted": "The write-off is reversed (stock comes back) and the day can be uploaded again. Products an inventory counted after these sales keep their counted stock.",
     "voidExplain": "The report is set aside and the day can be uploaded again. Stock does not change.",
     "void": "Void",
     "notKitchenTitle_one": "{{count}} item is not kitchen",
@@ -458,8 +452,11 @@
     "saveCorrections": "Save corrections",
     "correctHint": "Change quantities and prices right in the table; totals are recalculated at once. Saving reverses this day's write-off and posts the corrected one on the same date. Products already counted by an inventory keep their counted stock: the difference goes into that count's result.",
     "preparedBy": "Prepared by",
-    "preparedByHint": "Who made this report; any name",
+    "preparedByHint": "“Prepared by” is any name of who made the report",
     "countedAfterWrittenOff": "Counted by inventory #{{id}} on {{at}}: corrections keep the counted stock",
-    "countedEdit": "Counted by an inventory after these sales: the stock after the count stays as counted; the difference moves between the sales and the count's result."
+    "countedEdit": "Counted by an inventory after these sales: the stock after the count stays as counted; the difference moves between the sales and the count's result.",
+    "chooseFile": "Choose file",
+    "noFileChosen": "No file chosen",
+    "price": "Price"
   }
 }

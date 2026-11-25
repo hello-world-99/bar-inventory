@@ -1,224 +1,364 @@
-# Архитектура MVP — Bar Inventory
+# Architecture — Bar Inventory
 
-Статус: согласовано в `agent-room/discussion.md`, реплики 1–7. Исходное ТЗ: [`requirements.md`](requirements.md).
+Status: agreed in `agent-room/discussion.md`, replies 1–53. Original specification: [`requirements.md`](requirements.md) (English translation) / [`requirements.ru.md`](requirements.ru.md) (owner's original).
 
-## 1. Стек
+## 1. Stack and deployment
 
-| Слой | Выбор |
+| Layer | Choice |
 |---|---|
-| Backend | Python 3.13, FastAPI, **синхронный** SQLAlchemy 2.0 + psycopg 3, Alembic, Pydantic v2 |
-| БД | PostgreSQL 16 |
-| Frontend | React 18 + TypeScript + Vite, TanStack Query/Table, React Router, react-hook-form + zod, i18next, Tailwind CSS, `big.js` для арифметики количеств |
-| Auth | argon2, JWT access (15 мин, в памяти клиента) + refresh в cookie `HttpOnly; SameSite=Strict; Path=/api/v1/auth`, флаг `Secure` из env `COOKIE_SECURE` (по умолчанию `true`; `false` только для HTTP в LAN) |
-| Инфраструктура | Docker Compose: `db`, `backend` (uvicorn, **1 worker** — rate-limit в памяти), `web` (multi-stage node → nginx, nginx проксирует `/api` → один origin), `backup` (pg_dump по крону) |
-| Тесты | pytest на реальном Postgres: база `<POSTGRES_DB>_test` в том же сервисе `db`, запуск через `docker-compose.test.yml` (профиль `test`); conftest отказывается работать с базой без суффикса `_test`. Vitest для фронта |
+| Backend | Python 3.13, FastAPI, **synchronous** SQLAlchemy 2.0 + psycopg 3, Alembic, Pydantic v2 |
+| Database | PostgreSQL 16 |
+| Frontend | React 18 + TypeScript + Vite, TanStack Query/Table, React Router, i18next, Tailwind CSS, `big.js` for quantity and money arithmetic |
+| Auth | argon2; JWT access token (15 min, kept in client memory) + refresh token in an `HttpOnly; SameSite=Strict; Path=/api/v1/auth` cookie; the `Secure` flag comes from env `COOKIE_SECURE` (default `true`; `false` only for plain HTTP on a LAN) |
+| Infrastructure | Docker Compose: `db`; `backend` (uvicorn, **1 worker**: the login rate limit is in memory); `web` (multi-stage node → nginx; nginx proxies `/api`, so there is one origin); `backup` (`pgtool`, section 9) |
+| Tests | pytest against a real Postgres: database `<POSTGRES_DB>_test` in the same `db` service, run through `docker-compose.test.yml` (profile `test`). `conftest` refuses any database whose name does not end in `_test`. Vitest for the frontend |
 
-Размещение (LAN по HTTP или VPS с HTTPS) — открытый вопрос владельцу. Код работает в обоих режимах: UUID на клиенте генерируется через `crypto.getRandomValues` (доступен и вне secure context), а не `crypto.randomUUID`.
+**Deployment** (owner's decisions):
+- **First delivery: one computer, local** (reply 25). `start.bat` / `scripts/start.ps1`:
+  - creates `.env` with random secrets;
+  - starts Docker Desktop;
+  - runs `docker compose up -d --build`;
+  - prints the first `admin` password while it is still in `.env`.
 
-API — REST `/api/v1/...`, OpenAPI генерируется FastAPI и служит контрактом для будущих мобильного приложения и POS. `Decimal` передаётся в JSON **строкой**.
+  The web port is bound to `${BIND_ADDR:-127.0.0.1}:${HTTP_PORT:-8080}`.
+- **Later: a VPS with HTTPS.** `docker-compose.prod.yml` adds Caddy (automatic Let's Encrypt, HSTS) on ports 80/443. `web` then has no public port. nginx trusts `X-Forwarded-For` only from Caddy's fixed address on the `edge` network.
 
-## 2. Единицы измерения
+Nothing in the code assumes localhost. Client UUIDs come from `crypto.getRandomValues`, which works outside a secure context too, not from `crypto.randomUUID`.
 
-У товара три поля:
+The API is REST under `/api/v1/...`. FastAPI generates OpenAPI, which is the contract for a future mobile app or POS integration. `Decimal` values travel in JSON **as strings**.
 
-- `base_unit` ∈ `ml | g | pcs` — единица хранения всех количеств (`qty_base`, `NUMERIC(14,3)`).
-- `unit` ∈ `pcs | bottle | l | ml | kg | g` — единица товара из ТЗ: в ней закупают, задают цену и по умолчанию показывают.
-- `unit_size` — сколько `base_unit` в одной `unit`.
+## 2. Units of measure
+
+A product has three fields:
+
+- `base_unit` ∈ `ml | g | pcs` — the unit every quantity is stored in (`qty_base`, `NUMERIC(14,3)`).
+- `unit` ∈ `pcs | bottle | pack | l | ml | kg | g` — the product's own unit: purchases, the price and the default display use it.
+- `unit_size` — how many `base_unit` one `unit` holds.
 
 | unit | base_unit | unit_size |
 |---|---|---|
-| ml | ml | 1 (фиксировано) |
-| l | ml | 1000 (фиксировано) |
-| bottle | ml | задаётся (например 700) |
-| g | g | 1 (фиксировано) |
-| kg | g | 1000 (фиксировано) |
-| pcs | pcs | 1 (фиксировано) |
+| ml | ml | 1 (fixed) |
+| l | ml | 1000 (fixed) |
+| bottle | ml | set per product (e.g. 700) |
+| pack | g | set per product (e.g. 200; reply 37: meat is counted in packs and converted to grams) |
+| g | g | 1 (fixed) |
+| kg | g | 1000 (fixed) |
+| pcs | pcs | 1 (fixed) |
 
-Инварианты:
+Invariants:
 
-- `purchase_price` — цена за одну `unit` (бутылку, кг, шт.).
-- `min_stock_base` хранится в базовых единицах; минимум считается **суммарно по всем местам**. «Низкий остаток» = `min_stock_base > 0 AND Σ qty_base ≤ min_stock_base` (минимум — точка дозаказа; `0` = не отслеживать).
-- `base_unit`, `unit` и `unit_size` становятся **read-only, как только товар встречается в движениях, строках документов (включая черновики) или строках инвентаризаций** (409): иначе смена bottle → kg превратит сохранённые ml в g. Чтобы исправить, создают новый товар и деактивируют старый (SKU и штрихкод уникальны только среди активных товаров).
-- Ввод количества во всех формах (поступление, списание, перемещение, инвентаризация) — в `unit` или в `base_unit` по переключателю; сервер принимает `qty` + `qty_unit` и пересчитывает в `qty_base`.
-- Частичные бутылки: факт вводится как «N полных + X ml в открытой», хранится `N·unit_size + X` ml, отображается «2 btl + 350 ml (2.5 btl)».
-- Задел на взвешивание: nullable `full_weight_g`, `empty_weight_g` (UI позже).
+- `bottle` and `pack` are **containers**:
+  - their size is required;
+  - a container unit is accepted only for products counted in it (`CONTAINERS` in `core/units.py` and `lib/units.ts`).
+- `purchase_price` is the price of one `unit` (bottle, pack, kg, piece), **in won** (section 10).
+- `min_stock_base` is stored in base units and applies to the **total over all locations**.
+  - "Low stock" = `min_stock_base > 0 AND Σ qty_base ≤ min_stock_base`. The minimum is a reorder point; `0` means not tracked.
+  - The same rule is used everywhere: products list, stock rows, dashboard and POS report. Such products are shown in red (owner, 2026-11-25).
+- `base_unit`, `unit` and `unit_size` become **read-only once the product appears in movements, document lines (drafts included) or count lines** (409). Otherwise changing bottle → kg would turn stored ml into g. To fix a unit, create a new product and deactivate the old one: SKU and barcode are unique among active products only.
+- Quantities are entered in `unit` or in the base or metric unit of the same base; the server converts `qty` + `qty_unit` into `qty_base`.
+- **Partly used containers:**
+  - a count is entered as "N full + X in the open one"; `N·unit_size + X` is stored;
+  - display: "2 btl + 350 ml (2.5 btl)" or "2 pcs + 50 g (450 g)". The short label of a pack is "pcs" (owner).
+- Reserved for weighing: nullable `full_weight_g` and `empty_weight_g`.
 
-## 3. Модель данных
+## 3. Data model
 
 ```
-categories(id, code NULL UNIQUE, name, is_active)     -- seed: 5 категорий ТЗ с code (i18n-ключ);
-                                                      -- пользовательские: code NULL, name без перевода
+categories(id, code NULL UNIQUE, name, is_active)     -- seed: the 5 categories of the spec + 'kitchen' (code = i18n key)
 products(id, name, sku, category_id, unit, base_unit, unit_size,
-         purchase_price NUMERIC(14,2), price_updated_at, min_stock_base, barcode NULL,
+         purchase_price NUMERIC(14,2) -- won, price_updated_at, min_stock_base, barcode NULL,
          full_weight_g NULL, empty_weight_g NULL, is_active, created_at, updated_at)
    -- UNIQUE(lower(sku)) WHERE is_active; UNIQUE(barcode) WHERE is_active AND barcode IS NOT NULL
-locations(id, name, is_active)                        -- UNIQUE(lower(name)) WHERE is_active
-users(id, username, password_hash, role admin|staff, is_active, token_version)  -- UNIQUE(lower(username))
-settings(id=1, venue_name, currency, currency_decimals, timezone, business_day_starts_at, blind_count)
+locations(id, name, description, is_active)          -- UNIQUE(lower(name)) WHERE is_active
+users(id, username, full_name, password_hash, role admin|staff, is_active, token_version)
+settings(id=1, venue_name, currency KRW|USD, currency_decimals, timezone, business_day_starts_at, blind_count,
+         usd_krw_rate NULL, rate_mode auto|manual, rate_source, rate_date, rate_updated_at, rate_checked_at, rate_error)
 
 stock_balances(product_id, location_id, qty_base)  PK(product_id, location_id)
-   -- кэш журнала; инвариант: qty_base = SUM(stock_movements.delta_base) по паре
+   -- cache of the journal; invariant: qty_base = SUM(stock_movements.delta_base) of the pair
 
-stock_documents(id UUID — генерирует клиент, type receipt|write_off|transfer|inventory_adjustment|reversal,
-         status draft|posted, doc_date timestamptz, reason NULL, supplier NULL, invoice_no NULL,
-         comment, reversal_of NULL UNIQUE → stock_documents.id,
-         created_by, created_at, posted_by, posted_at, allow_negative bool)
-   -- CHECK: reason обязателен ⇔ type='write_off'; reversal_of обязателен ⇔ type='reversal'
-stock_document_lines(id, document_id, product_id, location_from_id NULL, location_to_id NULL,
-         qty_base NUMERIC(14,3),                 -- > 0, кроме inventory_adjustment (знаковое, ≠ 0)
-         unit_price NUMERIC(14,2) NULL,          -- поступление: цена за unit ровно как введена
+stock_documents(id UUID generated by the client, type receipt|write_off|transfer|inventory_adjustment|reversal,
+         status draft|posted, doc_date timestamptz, reason NULL, supplier NULL, invoice_no NULL, comment,
+         reversal_of NULL UNIQUE, request_hash NULL, allow_negative, backdate_confirmed,
+         price_rate NULL       -- receipts priced in dollars: the won-per-dollar rate used
+         sales_import_id NULL  -- compensation of a POS report corrected after a count (section 11)
+         created_by, created_at, posted_by, posted_at)
+   -- CHECK: reason required ⇔ type='write_off' (reasons incl. 'sales', set only by the POS import);
+   --        reversal_of required ⇔ type='reversal'
+stock_document_lines(id, document_id, line_no, product_id, location_from_id NULL, location_to_id NULL,
+         qty_base NUMERIC(14,3),                 -- > 0, except inventory_adjustment (signed, ≠ 0)
+         unit_price NUMERIC(14,2) NULL,          -- receipt: price per unit in won
          unit_cost_base NUMERIC(18,6))
-   -- CHECK по типу документа (проверяется в сервисе, т.к. тип на родителе):
-   --   receipt: только location_to; write_off: только location_from;
-   --   transfer: оба, from ≠ to; inventory_adjustment/reversal: ровно одно из двух
-stock_movements(id, document_id, product_id, location_id, delta_base, unit_cost_base NUMERIC(18,6) NOT NULL,
-         balance_after, doc_date, created_at, user_id)   -- append-only
-   -- doc_date — бизнес-дата (фильтры журнала); created_at — порядок проведения (balance_after, §5)
-   -- INDEX(product_id, location_id, created_at); INDEX(doc_date)
-   -- FK(product_id, location_id) → stock_balances: движение без строки остатка невозможно
-   -- триггер BEFORE UPDATE OR DELETE → исключение: журнал append-only на уровне БД
+stock_movements(id, document_id, product_id, location_id, delta_base, unit_cost_base NOT NULL,
+         balance_after, doc_date, created_at, user_id)   -- append-only (trigger)
+   -- doc_date: the business date (journal filters, counts); created_at: posting order
+   -- INDEX(product_id, location_id, doc_date)
 
 inventories(id, location_id, status in_progress|completed|cancelled, started_by, started_at,
          completed_by, completed_at, comment, adjustment_document_id NULL UNIQUE)
-   -- частичный UNIQUE(location_id) WHERE status='in_progress'
-   -- единственный носитель связи инвентаризация ↔ документ корректировки
+   -- partial UNIQUE(location_id) WHERE status='in_progress'
 inventory_lines(id, inventory_id, product_id, UNIQUE(inventory_id, product_id),
-         expected_at_start_base,                 -- остаток при старте (или при добавлении строки); для отчёта
-         counted_base NULL, expected_at_count_base NULL, counted_at NULL, counted_by NULL,
-         unit_cost_base NULL,                    -- снимок цены при завершении
-         version)
+         expected_at_start_base, counted_base NULL, expected_at_count_base NULL, counted_at NULL, counted_by NULL,
+         unit_cost_base NULL, version)
+
+-- POS sales import (section 11)
+pos_items(id, code UNIQUE, name, not_kitchen, updated_at)
+pos_item_components(pos_item_id, product_id, qty_base > 0)        -- the norm: one sold unit uses qty_base
+sales_imports(id UUID, sales_date, file_name, file_sha256, content_sha256, status draft|posted|covered|voided,
+         total_qty, total_revenue, warnings jsonb, location_id, write_off_id UNIQUE, covered_inventory_id,
+         post_request_id, prepared_by, uploaded_by, uploaded_at, closed_by, closed_at)
+   -- UNIQUE(sales_date) and UNIQUE(content_sha256) WHERE status <> 'voided'
+sales_import_lines(id, import_id, line_no, pos_code, pos_name, qty, revenue)   -- UNIQUE(import_id, pos_code)
+sales_import_usage(id, import_id, pos_code, pos_name, sold_qty, product_id, per_unit_base, qty_base,
+         covered_inventory_id, covered_at, unit_cost_base)   -- snapshot taken when the report is closed
 ```
 
-## 4. Проведение документов
+## 4. Posting documents
 
-Одна транзакция:
+One transaction:
 
-1. `UPDATE stock_documents SET status='posted', posted_at=now() WHERE id=:id AND status='draft' RETURNING ...` — 0 строк → 409 (защита от двойного проведения).
-2. Товары документа — `SELECT … FROM products WHERE id IN (…) ORDER BY id FOR SHARE`: проведения не мешают друг другу, но сериализуются с `update_product` (`FOR UPDATE` товара), так что `unit_size` не может смениться между чтением и записью первого движения. То же — при вводе строки инвентаризации.
-   Затем для всех затронутых пар `(product_id, location_id)` — `INSERT ... ON CONFLICT DO NOTHING` и `SELECT ... FOR UPDATE` **в порядке (product_id, location_id)**. Порядок блокировок везде один: **строка инвентаризации (если участвует) → товары → строки инвентаризации / остатки** (нет дедлоков).
-3. Проверка отрицательного остатка (списание, перемещение, сторно): staff → 422; admin → допустимо при `allow_negative=true`, флаг видно в журнале. **Исключение:** корректировка инвентаризации проверку минуса не проходит — её результат по определению равен факту.
-4. Обновление `stock_balances`, запись `stock_movements` с обязательным снимком `unit_cost_base`, `doc_date` документа и `created_at = now()`.
+1. **Locks.**
+   - The document's products: `SELECT … FROM products WHERE id IN (…) ORDER BY id FOR SHARE` (`FOR UPDATE` for receipts, which update the price). Postings do not block each other but serialize with product updates, so `unit_size` cannot change between reading it and writing the first movement.
+   - Then, for every affected `(product_id, location_id)` pair: `INSERT … ON CONFLICT DO NOTHING` and `SELECT … FOR UPDATE` **ordered by (product_id, location_id)**.
+   - **The lock order is the same everywhere:** POS report row / count row (if involved) → products → count lines / balances. So there are no deadlocks.
+2. **Checks that depend on other transactions** (backdate, absorption A1 of reversals, POS coverage) run **after the balance locks** (`pre_check` in `_post`). Completing a count locks the same rows before writing `status='completed'`, so under READ COMMITTED the check sees a committed completion (no TOCTOU).
+3. **Negative stock check** (write-off, transfer, reversal):
+   - staff → 422;
+   - admin → allowed with `allow_negative=true`, and the flag is visible in the journal;
+   - count adjustments and POS compensations are exempt.
+4. **The document is flipped to posted.** Lines are written to a draft, then `UPDATE … SET status='posted' WHERE status='draft'`; 0 rows → 409. Triggers make posted documents and their lines immutable.
+5. **Balances are updated** and movements written, with the `unit_cost_base` snapshot, the document's `doc_date` and `created_at = now()`.
 
-Проверки даты документа:
+`posted_at` and `completed_at` use `clock_timestamp()` taken after the locks, not `now()` (the transaction start): A1 depends on their order (reply 17).
 
-- `doc_date` в будущем (больше `now()` + 5 мин на рассинхрон часов) → 422 `future_date`; старше года → 422 `date_too_old` (ловит опечатки вида «1925»).
-- **Бэкдейт проверяется по парам (товар, место), а не по месту целиком:** документ конфликтует, только если завершённая инвентаризация **посчитала** пару с `counted_at ≥ doc_date`. Такой пересчёт уже физически содержит документ, и проведение задвоит его. Тогда staff → 422 `backdate_forbidden`; admin → 422 `backdate_confirmation_required` без флага `confirm_backdate=true`, с флагом — проводится с пометкой `backdate_confirmed`. Пары, посчитанные **незавершённой** инвентаризацией, не конфликтуют: завершение пересчитает ожидаемое по `doc_date` (§5). Документ, датированный после подсчёта пары, — не бэкдейт.
-- **Проверки, зависящие от других транзакций (бэкдейт и A1 у сторно), выполняются после блокировки строк остатков** (колбэк `pre_check` в `_post`). Завершение инвентаризации блокирует те же строки до записи `status='completed'`, поэтому под READ COMMITTED проверка видит закоммиченное завершение (нет TOCTOU).
-- Пределы: строка ≤ 10⁹ базовых единиц, остаток по модулю ≤ 99 999 999 999.999 (`NUMERIC(14,3)`), иначе 422 `qty_too_large`; любой `DataError` → 422, не 500.
+**Document date:**
+- in the future (more than `now()` + 5 min of clock skew) → 422 `future_date`;
+- older than a year → 422 `date_too_old`.
 
-**Моменты времени, участвующие в A1 (`posted_at`, `completed_at`), берутся `clock_timestamp()` после блокировок остатков, а не `now()`.** `now()` — начало транзакции: у транзакции, ждавшей блокировку, оно не отражает порядок видимости, и A1 ошибся бы при встречном завершении инвентаризации (реплика 17, П1).
+**Backdating is checked per (product, location) pair.** A document conflicts only if a completed count **counted** the pair with `counted_at ≥ doc_date`:
+- staff → 422 `backdate_forbidden`;
+- admin → 422 `backdate_confirmation_required` without `confirm_backdate=true`; with the flag the document posts and is marked `backdate_confirmed`.
 
-Неизменяемость на уровне БД: триггеры отклоняют UPDATE/DELETE проведённого документа (разрешён только переход `draft → posted`) и любые INSERT/UPDATE/DELETE строк проведённого документа. Поэтому сервис сначала пишет строки в черновик, затем переводит его в `posted`. Журнал движений — append-only (триггер).
+**Limits:** a line ≤ 10⁹ base units, a balance ≤ 99 999 999 999.999 → otherwise 422 `qty_too_large`. Any `DataError` → 422, never 500.
 
-Идемпотентность: клиент генерирует UUID документа; повторный POST с тем же id и тем же содержимым возвращает существующий документ (200), с иным содержимым → 409.
+**Idempotency:** the client generates the document UUID.
+- The same id with the same body (sha256 of the canonical request) → the existing document, 200.
+- The same id with a different body → 409.
 
-`unit_cost_base` в движении: поступление — `unit_price / unit_size` строки; остальные — текущая `purchase_price / unit_size` на момент проведения; сторно — `unit_cost_base` исходных движений. Поступление обновляет `products.purchase_price` (и `price_updated_at = doc_date`), только если `doc_date ≥ price_updated_at`: бэкдейт не перетирает актуальную цену. Сторно поступления цену не откатывает.
+**`unit_cost_base` of a movement:**
+- receipt — `unit_price / unit_size`;
+- others — the current `purchase_price / unit_size`;
+- reversal — the original's costs;
+- POS write-off — the price typed in the report by an admin, if any (section 11).
 
-Оценка — три разных величины, не смешивать:
+A receipt updates `purchase_price` only if `doc_date ≥ price_updated_at`.
 
-| Что | Как считается |
+**Valuation:**
+
+| What | How |
 |---|---|
-| Стоимость запасов (dashboard, остатки) | Σ `qty_base × purchase_price / unit_size` по **текущей** цене; отрицательные остатки входят как есть |
-| Суммы журнала, документов, завершённых инвентаризаций | из `unit_cost_base` движений и строк (исторический снимок) |
-| Расхождения незавершённой инвентаризации | по текущей цене; при завершении цена снимается в строку |
+| Stock value (dashboard, stock) | Σ `qty_base × purchase_price / unit_size` at the **current** price |
+| Journal, documents, completed counts | from `unit_cost_base` of movements and lines (historical snapshot) |
+| Discrepancies of a count in progress | current price; the price is frozen into the line on completion |
 
-Деньги округляются только при выводе (`currency_decimals`).
+Money is rounded only for display (section 10).
 
-Исправление ошибок: admin выполняет `reverse` для проведённого поступления, списания или перемещения. Создаётся документ `reversal` с зеркальными движениями и `reversal_of` (UNIQUE — повторное сторно → 409). Сторно → 409 `counted_after`, если по любой паре (product, location) документа есть завершённая инвентаризация, которая **поглотила** документ: `completed_at > posted_at` (её ожидаемое включало документ) и пара посчитана с `counted_at ≥ doc_date` исходника. Пересчёт уже учёл документ, и сторно испортит остаток. Проверка идёт по `inventory_lines` (`counted_base IS NOT NULL`), **а не по движениям корректировки**: при совпадении факта с учётом (`delta = 0`) движения нет, но документ всё равно учтён. Проверка выполняется под блокировкой остатков.
+**Corrections — reversal (admin) of a posted receipt, write-off or transfer.** It creates a `reversal` document with mirrored movements and `reversal_of` (unique: a second reversal → 409).
+- **A1:** 409 `counted_after` if a completed count absorbed the document, i.e. `completed_at > posted_at` and the pair was counted with `counted_at ≥` the original's `doc_date`.
+- **The reversal carries the original's `doc_date`:** it fixes a record rather than describing a new event.
+- A POS report's write-off can **not** be reversed from the journal (409 `use_sales_report`). It is corrected or voided on its report (section 11).
+- Count adjustments are not reversible; they are corrected by a new count.
 
-**Дата сторно = `doc_date` исходника** (у документа и у движений): сторно исправляет запись, а не описывает новое физическое событие. Благодаря этому незавершённая инвентаризация взаимно гасит исходник и его сторно (§5, Факт 1). Когда сторно сделано, видно по `created_at`/`posted_at`. Корректировки инвентаризации не сторнируются: исправляются новой инвентаризацией.
+## 5. Inventory counts
 
-## 5. Инвентаризация
+- **Start** — one count in progress per location. Lines: every active product with a balance row at the location (zero and negative included) + `expected_at_start_base`. Products found on the shelf can be added.
+- **Counting a line:** the client sends `parts` (e.g. full bottles + open ml), `counted_at` (when the person tapped "counted", possibly offline) and `sent_at`.
+  - The server removes the device clock skew: `counted_at += server_now − sent_at`.
+  - Then it clamps the result to `[started_at, now()]`.
+  - Line `version` → 409 on concurrent overwrite.
+  - The offline queue of the device keeps every entry until the server answers definitively.
+- **Expected quantity at the moment of counting** is computed from event dates, not entry dates: `expected_at_count_base = Σ delta_base of the pair with doc_date ≤ counted_at`.
+  - It is shown when the line is entered.
+  - It is computed again on completion under the balance locks.
+- **Blind count:** `settings.blind_count` hides expected values from staff. It is a hint for honesty, not security.
+- **Completion** (admin), one transaction:
+  1. count row `FOR UPDATE`;
+  2. products `FOR SHARE`;
+  3. counted balances `FOR UPDATE`;
+  4. `completed_at = clock_timestamp()`;
+  5. optional "uncounted = zero";
+  6. expected values;
+  7. an `inventory_adjustment` document with `delta = counted − expected` at `doc_date = completed_at` (no negative check);
+  8. status `completed`.
+- **Cancel** (admin): stock unchanged.
+- **Why this formula:**
+  - counter-examples A and B (reply 2);
+  - offline entry (reply 4);
+  - a reversal during a count and a backdated receipt during a count (reply 15).
+- **Before completing,** the dialog lists the business days without a written-off POS report at this location (section 11). Their sales would otherwise read as a shortage.
 
-- Старт (одна активная на место): строки по всем **активным** товарам, у которых есть запись в `stock_balances` на этом месте (включая нулевой и отрицательный остаток), плюс `expected_at_start_base`.
-- Можно добавить строку товара, которого нет в снимке; его `expected_at_start_base` = остаток на момент добавления.
-- Ввод факта строки: клиент присылает `counted_base`, `counted_at` — момент, когда человек нажал «посчитано» на устройстве (отправка может быть позже, буфер в `localStorage`), и `sent_at` — часы устройства в момент отправки. Сервер сначала снимает рассинхрон часов устройства: `counted_at += server_now − sent_at` (задержка отправки сохраняется, сдвиг часов вычитается). Затем ограничивает результат интервалом `[inventory.started_at, now()]`. Проверка `version` строки (конкурентная перезапись → 409). Повторный ввод перезаписывает все поля.
-- **Ожидаемое на момент подсчёта считается по физическому времени событий, а не по времени ввода:**
-  `expected_at_count_base = Σ delta_base движений пары с doc_date ≤ counted_at`.
-  - При вводе строки значение вычисляется и сохраняется **только для показа** на экране пересчёта («по данным на сейчас»).
-  - **При завершении** оно пересчитывается заново под `FOR UPDATE` остатков, и именно оно идёт в корректировку. Между вводом и завершением могли появиться сторно или документы задним числом, датированные раньше подсчёта.
-  - Индекс `stock_movements(product_id, location_id, doc_date)` (миграция 0004).
-- **Слепой пересчёт** — настройка `settings.blind_count` (по умолчанию `false`, буквально по ТЗ §2.5: «отображение расчётных остатков»). При `true` форма пересчёта скрывает ожидаемое и расхождения от staff. Это подсказка для честности, а не защита: staff видит остатки на странице Stock.
-- Завершение (только admin), одна транзакция:
-  1. `SELECT … FOR UPDATE` строки инвентаризации — защита от двойного завершения и от параллельного ввода строк, которые держат её `FOR SHARE`;
-  2. товары `FOR SHARE`;
-  3. остатки посчитанных пар `FOR UPDATE`;
-  4. только теперь `completed_at = clock_timestamp()`;
-  5. «обнулить непосчитанное» ставит `counted_at` = этот момент;
-  6. ожидаемое по формуле;
-  7. документ корректировки;
-  8. `UPDATE … SET status='completed' WHERE status='in_progress'`.
+## 6. Permissions (`backend/app/core/permissions.py`, single place)
 
-  Корректировка (шаг 7): `delta = counted_base − expected_at_count_base` по каждой посчитанной строке с `delta ≠ 0` применяется к **текущему** остатку под `FOR UPDATE` через документ `inventory_adjustment` (без проверки минуса, `doc_date = completed_at`); `unit_cost_base` снимается в строку и в движение.
-- Непосчитанные строки: по умолчанию корректировки нет, UI явно показывает список. Опция admin «обнулить непосчитанное» трактует их как counted = 0 с `expected_at_count` = текущий остаток.
-- Отмена (admin): остатки не меняются.
-- Деактивировать место с активной инвентаризацией нельзя (409).
-
-Обоснование формулы:
-- **Контрпримеры A/B (реплика 2):** если списание прошло после подсчёта строки, `counted − current` удваивает его; `counted − snapshot_start` теряет списание, прошедшее до подсчёта.
-- **Офлайн-ввод (реплика 4):** отправка позже подсчёта.
-- **Факт 1 (реплика 15) — сторно во время пересчёта:** ошибочное поступление 70 вместо 7, физически 7, посчитано 7, затем сторно. Σ(doc_date ≤ counted_at) = +70 − 70 = 0 → delta = +7 → итог 0 + 7 = 7.
-- **Факт 2 (реплика 15) — документ задним числом во время пересчёта:** утренняя поставка 6, оформленная после вечернего подсчёта 10 при остатке 4. Σ = 4 + 6 = 10 → delta = 0 → итог 10.
-
-Формула по `created_at` (версия до реплики 15) ломалась на обоих фактах: `created_at` — время ввода, а пересчёт сравнивается с физическим временем. У обычных движений `doc_date = now()`, и они совпадают.
-
-Остаточный риск: человек нажал «посчитано» заметно позже фактического пересчёта полки — это ограничение процесса, UI подсказывает отмечать строку сразу.
-
-## 6. Матрица прав (`backend/app/core/permissions.py`, единое место)
-
-| Действие | admin | staff |
+| Action | admin | staff |
 |---|---|---|
-| Dashboard, остатки, каталог (просмотр), журнал | ✔ | ✔ |
-| Каталог, категории, места хранения: создать / изменить / деактивировать | ✔ | — |
-| Поступление: создать и провести | ✔ | ✔ |
-| Списание: создать и провести (причина обязательна) | ✔ | ✔ (без ухода в минус) * |
-| Перемещение | ✔ | ✔ (без ухода в минус) |
-| Сторно документа | ✔ | — |
-| Инвентаризация: начать, ввести факты | ✔ | ✔ (ожидаемое скрыто, если `blind_count`) |
-| Проведение задним числом раньше последней инвентаризации | ✔ (`confirm_backdate`) | — |
-| Инвентаризация: видеть расхождения, завершить, отменить | ✔ | — |
-| Пользователи, настройки | ✔ | — |
+| Dashboard, stock, catalog (view), journal, POS reports (view) | ✔ | ✔ |
+| Catalog, categories, locations, **POS norms**: create / edit / deactivate | ✔ | — |
+| Receipt: create and post | ✔ | ✔ |
+| Write-off: create and post (reason required) | ✔ | ✔ posted immediately (owner, reply 21), no negative stock |
+| Transfer | ✔ | ✔ (no negative stock) |
+| Reverse a document | ✔ | — |
+| **POS report: upload, write off, correct quantities before writing off, sign a draft** | ✔ | ✔ |
+| **POS report: change prices, correct or void a written-off day, sign a closed report** | ✔ | — |
+| Count: start, enter quantities | ✔ | ✔ (expected hidden if `blind_count`) |
+| Posting backdated before a count | ✔ (`confirm_backdate`) | — |
+| Count: see discrepancies, complete, cancel | ✔ | — |
+| Users, settings (currency, rate) | ✔ | — |
 
-\* Открытый вопрос владельцу: проводит ли staff списание сразу или только создаёт черновик для admin, и нужна ли настройка «разрешённых операций» staff из интерфейса (ТЗ §4). До ответа — фиксированная матрица, «проводит сразу».
+Administrators are protected: you cannot deactivate or demote yourself or the last active admin (409).
 
-Защита администраторов: нельзя деактивировать или понизить себя; нельзя деактивировать или понизить последнего активного admin (409, проверка под блокировкой строк admin'ов).
+## 7. Time
 
-## 7. Время
+`timestamptz` (UTC) everywhere; displayed in `settings.timezone`. The installation uses **Asia/Seoul** (owner).
 
-`timestamptz` (UTC) везде; отображение в `settings.timezone`. «Операционный день» начинается в `settings.business_day_starts_at` (по умолчанию 06:00) и используется в фильтрах и dashboard.
+The business day starts at `settings.business_day_starts_at` (06:00). It is used in filters, the dashboard and POS reports. A count after midnight still belongs to the same day.
 
-## 8. Безопасность
+## 8. Security
 
-- Первый admin создаётся CLI-командой `python -m app.cli create-admin` или из env при первом старте; захардкоженных паролей нет.
-- Rate-limit `/api/v1/auth/login` (in-memory, один инстанс backend): 10 неудач за 5 мин на пару (IP, username) и 30 за 15 мин на username с любых адресов. IP берётся из `X-Forwarded-For`, который nginx **перезаписывает** `$remote_addr` (не дописывает) — клиент не может выбрать себе ключ. Ключи лимитера удаляются по истечении окна, число ключей ограничено.
-- Смена своего пароля — только через `/auth/change-password` (перевыпускает токены текущей сессии); `PATCH /users/{self}` с паролем → 400.
-- При входе хэш пересчитывается, если параметры argon2 изменились (`check_needs_rehash`).
-- `currency_decimals` ≤ 2 (цены — `NUMERIC(14,2)`).
-- При деактивации пользователя или смене пароля `token_version++` инвалидирует refresh-токены.
-- CORS не нужен (один origin через nginx).
+- **First admin:** created from env on first start (`INITIAL_ADMIN_PASSWORD`, printed by `start.bat` until removed from `.env`) or by `python -m app.cli create-admin`. No hard-coded passwords.
+- **Login rate limit** (in memory, one backend instance): 10 failures per 5 min per (IP, username) and 30 per 15 min per username.
+  - The IP comes from `X-Forwarded-For`, which nginx overwrites with `$remote_addr`. Behind Caddy, nginx trusts only Caddy's address.
+  - `/auth/change-password` is limited the same way per user.
+- **Own password** changes only through `/auth/change-password`, which re-issues the session tokens. `token_version++` revokes refresh tokens on deactivation or password change.
+- **POS files are untrusted** (section 11): size limits, streaming XML parse, no DTD, no formulas.
+- **Exchange rate request** (section 10): HTTPS only, at most 2 HTTPS redirects, a capped response, strict parsing. It carries no data about the bar.
+- No CORS (one origin).
 
-## 9. Бэкапы
+## 9. Backups
 
-Контейнер `backup`: `pg_dump -Fc` по крону в bind-mount `./backups` на хосте, ротация 14 дней, скрипт `restore.sh`. README предупреждает, что копия на том же диске — не бэкап. Приёмка: реальное восстановление в чистую БД.
+Service `backup` (`backup/pgtool.sh`, image `postgres:16-alpine`):
+- `daemon` — a daily `pg_dump -Fc` at `BACKUP_AT` (`HH:MM`, time zone `TZ`) into `./backups`:
+  - written to `.partial` and checked with `pg_restore --list` before it counts;
+  - rotation keeps 14 days, but never fewer than the 7 newest dumps;
+  - healthcheck: unhealthy without a successful dump in the last 26 hours.
+- Commands:
+  - `dump`, `list`;
+  - `verify FILE` — restore into a scratch database, print row counts and journal mismatches;
+  - `restore FILE --yes` — restore into a new database and swap it in by rename; the previous database is kept as `<db>_before_<timestamp>`.
 
-## 10. Frontend
+The README warns that a copy on the same disk is not a backup. Copy `backups/` elsewhere.
 
-- Боковая навигация: Dashboard, Products, Locations, Stock, Receipts, Write-offs, Transfers, Inventory, Journal, Users и Settings (последние два — admin).
-- i18n: все строки через ключи (en), enum'ы через ключи, числа и даты через `Intl`; названия товаров не переводятся.
-- Ввод строк инвентаризации дублируется в `localStorage` и досылается при потере сети.
-- Dev на Windows: Vite `server.watch.usePolling: true`.
+## 10. Currency (replies 33–35)
 
-## 11. Тесты-инварианты (пишутся на этапе 3, не на 6)
+**Storage.** All money is stored in **won**: prices, costs, movements and sums. Changing the currency or the rate never changes a stored number.
 
-- Два параллельных списания последней бутылки: одно проходит, второе 422.
-- Инвентаризация, случаи A и B (списание до и после ввода строки).
-- Двойное проведение одного документа и повтор POST с тем же UUID.
-- Офлайн-ввод строки с `counted_at` в прошлом при движении между подсчётом и отправкой.
-- Факт 1: сторно ошибочного поступления во время пересчёта. Факт 2: поступление задним числом (раньше `counted_at`), оформленное после подсчёта.
-- Сторно, ждущее блокировки остатков, пока завершается инвентаризация, получает 409 (TOCTOU A1).
-- Двойное завершение инвентаризации.
-- Проведение против параллельной смены `unit_size` товара: либо смена получает 409, либо проведение видит новый размер — никогда смешанно.
-- Сторно после инвентаризации по той же паре → 409; повторное сторно → 409.
-- Бэкдейт раньше последней инвентаризации → 422 для staff, для admin без `confirm_backdate` → 422.
-- Деактивация/понижение последнего admin и себя → 409.
-- `SUM(movements) = balances` после каждого сценария; admin-эндпоинт сверки.
+**Display.**
+- `settings.currency` is the **display** currency:
+  - `KRW` — the default, 0 decimals;
+  - `USD` — amounts shown as won / `usd_krw_rate`, 2 decimals.
+- Decimals follow the currency; the server sets them.
+- The conversion happens in one place: `moneyFormat` / `useCurrency` / `useMoney` in `frontend/src/lib/format.ts`.
+- The menu shows the rate in use and its date, and "update failed" when the last fetch failed.
+
+**Exchange rate.**
+- `rate_mode=auto`: a background thread in the FastAPI lifespan checks hourly and fetches when the rate is a day old (an hour after a failure). It also fetches on "Update now".
+  - **Source:** `RATE_URL`, default Frankfurter, ECB reference rates: free, no key, HTTPS.
+  - **Validation:** timeout 8 s, response ≤ 64 KB, exactly `rates.KRW` as a number within 500…5000.
+  - **On failure** the last rate is kept and `rate_error` recorded.
+  - **The write** is one `UPDATE … WHERE rate_mode='auto'`, safe with several workers.
+- `rate_mode=manual`: the admin types the rate (100…100000); the automatic update never overwrites it.
+- `USD` without a rate → 422 `rate_required`.
+
+**Prices typed in dollars.**
+- Receipts and the product card send `price_currency`.
+- The server multiplies by the current rate and rounds to whole won.
+- A receipt keeps the rate in `price_rate`.
+- The product card sends a price only when it changed, so there is no rounding drift.
+
+Past documents shown in USD use today's rate; rates by date are not kept.
+
+## 11. POS sales import (replies 30–52)
+
+The owner uploads the POS daily "sales by item" report (`.xlsx`). The app computes the kitchen usage by norms and writes it off from stock.
+
+**Parser** (`services/pos_xlsx.py`, standard library only):
+- **Limits on the file:**
+  - file ≤ 2 MB, ≤ 50 zip parts;
+  - every part read in chunks, ≤ 4 MB unpacked — zip bombs are cut by actual size, not the declared one.
+- **Streaming parse** of every XML part with expat, with limits enforced while parsing:
+  - ≤ 5000 rows, ≤ 64 cells per row, ≤ 1024 characters per cell;
+  - DTD and entity declarations refused in any encoding, external entities never resolved.
+- **Columns** are found by the report's literal Korean headers: `상품코드` (code), `상품명` (name), `수량` (quantity), optional `실매출` (revenue). The total row `합계` is skipped and checked against the sum.
+- **Rows:**
+  - formulas in used cells are refused;
+  - rows with the same code are summed before negative totals are clamped;
+  - codes written as numbers are matched to known codes by digits.
+- **Errors** are 422 with a code: `bad_file`, `file_too_large`, `missing_columns`, `formula_not_allowed`, `bad_qty`, `bad_row`, `empty_report`.
+- The upload is the raw body (no multipart).
+
+**Norms.**
+- `pos_items` + `pos_item_components` are data, edited by an admin (page "POS norms").
+- An item can be marked "not kitchen" (drinks).
+- Seeded by migration 0006 with the owner's norms:
+  - Fries 350 g, Half Fries 175 g;
+  - Fish & Chips 200 g fries + 1 fish;
+  - Full wings 400 g, Half wings 200 g;
+  - Philly 200 g meat + 1 bun.
+- The burger (175 g fries + 200 g meat + 1 bun) is a one-click preset; its POS code is unknown yet.
+
+**Report** (`sales_imports`):
+- one active report per business day and per content hash — both are unique indexes;
+- a draft follows the current norms; closing it freezes the usage snapshot;
+- items without a norm are listed on top; writing off needs `acknowledge_unmapped`;
+- `prepared_by` is free text (default: the user's name), editable without touching stock.
+
+**Write-off (`post`)** — an ordinary `write_off` with reason `sales`, dated at the **start** of the sales business day.
+- Under the balance locks, every product that a completed count at that location counted at or after that moment is **covered**: it is skipped and marked, because the count already contains the sales.
+- Nothing left to write off → status `covered`, no document.
+- Before writing off, quantities can be corrected in the report (difference kept as a "Manual correction" part), prices by an admin only.
+
+**Correct and void a written-off day** — one procedure, `_rewrite(old, target)`; void is `target = {}`.
+1. Lock the report, the products, then the balances.
+2. Find the covered products.
+3. Reverse the old write-off. The absorption check is skipped because the counted pairs are compensated.
+4. For every covered product, post a compensation `target − old`: an `inventory_adjustment` with `sales_import_id`, dated at the earliest affected `counted_at`. That date is ≥ the start of the day and ≤ every affected count.
+5. Post the new write-off at the start of the day (none for a void).
+
+Every completed count therefore still sees exactly what it saw (`Σ movements ≤ counted_at = expected_at_count_base`), and the stock after it stays as counted. Only the split between "sales" and "count shortage" changes.
+
+**Pending days.** `GET /sales-imports/pending-days?location_id=` lists the business days after the last closed report at a location. It is shown before completing a count.
+
+**Example data:**
+- `python -m app.cli seed-example` — one POS day from the owner's file with a receipt.
+- `examples/pos/` — five generated days.
+
+## 12. Frontend
+
+- **Sidebar:**
+  - Dashboard, Stock;
+  - Operations — Receipts, Write-offs, Transfers, Inventory, **Sales (POS)**, Journal;
+  - Catalog — Products, Locations, **POS norms**;
+  - Administration — Users, Settings (admin).
+- **i18n:** every string is a key (English), enums through keys, numbers and dates through `Intl`. Product names are not translated. Russian and Korean can be added as locale files later.
+- **Count lines** are queued in `localStorage` per user and entry (`entryId`) and resent after a lost connection; sign-out warns about unsent counts.
+- **Low stock** is red on Stock, Products, the dashboard and in the POS report ("running out").
+
+## 13. Invariant tests
+
+- Two parallel write-offs of the last bottle: one passes, the other gets 422.
+- Counts: cases A and B, offline entry, a reversal and a backdated receipt during a count.
+- Double posting and a retried POST with the same UUID; double completion of a count.
+- A reversal waiting for the balance locks while a count completes → 409 (A1 TOCTOU).
+- Posting against a concurrent `unit_size` change.
+- Backdating before a count: staff 422; admin without `confirm_backdate` → 422.
+- The last admin and yourself cannot be deactivated or demoted.
+- **POS:**
+  - parser on the owner's file and on broken, bloated and hostile files;
+  - reference usage;
+  - same day twice and the same sales under another date;
+  - double click;
+  - per-product coverage;
+  - correct and void before and after a count with `counts_hold`;
+  - no journal reversal of POS write-offs;
+  - prices by admin only.
+- **Currency:** won by default, `rate_required`, rate failures keep the last rate, dollar prices stored in won, no stored number changes with the currency or the rate.
+- After every scenario: `SUM(movements) = balances`; admin endpoint `/stock/reconcile`.

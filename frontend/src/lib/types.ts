@@ -137,6 +137,8 @@ export interface StockDocument {
   created_at: string;
   posted_at: string | null;
   inventory_id: number | null;
+  /** compensation of a POS report corrected after an inventory */
+  sales_import_id?: string | null;
   total_amount: string;
   lines: DocLine[];
 }

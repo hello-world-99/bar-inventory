@@ -6,7 +6,7 @@ import { ProductPicker, useActiveLocations, useActiveProducts } from "@/componen
 import { Alert, Badge, Button, Input, PageHeader, Select } from "@/components/ui";
 import { api } from "@/lib/api";
 import { errorMessage } from "@/lib/errors";
-import { useDateTime, useMoney, useQty } from "@/lib/format";
+import { useDateTime, useQty } from "@/lib/format";
 import type { DocType, Movement, Page } from "@/lib/types";
 import { DocumentView } from "./documents/DocumentView";
 
@@ -15,7 +15,6 @@ const PAGE = 100;
 
 export function JournalPage() {
   const { t } = useTranslation();
-  const money = useMoney();
   const qty = useQty();
   const dt = useDateTime();
   const products = useActiveProducts().data ?? [];
@@ -87,7 +86,6 @@ export function JournalPage() {
               <th className="px-4 py-3 font-medium">{t("docs.location")}</th>
               <th className="px-4 py-3 text-right font-medium">{t("journal.change")}</th>
               <th className="px-4 py-3 text-right font-medium">{t("journal.balance")}</th>
-              <th className="px-4 py-3 text-right font-medium">{t("docs.amount")}</th>
               <th className="px-4 py-3 font-medium">{t("docs.author")}</th>
             </tr>
           </thead>
@@ -128,7 +126,6 @@ export function JournalPage() {
                     {d.main}
                   </td>
                   <td className="px-4 py-2 text-right tabular-nums">{qty(m.balance_after, m).main}</td>
-                  <td className="px-4 py-2 text-right tabular-nums">{money(m.amount)}</td>
                   <td className="px-4 py-2">{m.user_name}</td>
                 </tr>
               );

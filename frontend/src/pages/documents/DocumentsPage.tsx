@@ -53,7 +53,6 @@ export function DocumentsPage({ type }: { type: "receipt" | "write_off" | "trans
     cols.push(
       { id: "comment", header: t("docs.comment"), accessorFn: (d) => d.comment, cell: ({ getValue }) => <span className="line-clamp-2">{getValue() as string}</span> },
       { id: "lines", header: t("docs.lines"), meta: { align: "right" }, accessorFn: (d) => d.line_count },
-      { id: "amount", header: t("docs.amount"), meta: { align: "right" }, accessorFn: (d) => Number(d.total_amount), cell: ({ row: { original: d } }) => money(d.total_amount) },
       { id: "author", header: t("docs.author"), accessorFn: (d) => d.created_by_name },
     );
     return cols;

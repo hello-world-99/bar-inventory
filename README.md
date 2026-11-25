@@ -2,7 +2,7 @@
 
 Web application for stock control and inventory counts in a small bar: products, storage locations, receipts, write-offs, transfers, inventory counts with discrepancy costing, and a full movement journal.
 
-- Requirements: [`docs/requirements.md`](docs/requirements.md)
+- Requirements: [`docs/requirements.md`](docs/requirements.md) (English translation; the owner's original is [`docs/requirements.ru.md`](docs/requirements.ru.md))
 - Architecture and agreed design decisions: [`docs/architecture.md`](docs/architecture.md)
 
 **Status:** MVP complete (stages 1–6). First delivery: one computer, local use. A VPS with HTTPS is described below for later.

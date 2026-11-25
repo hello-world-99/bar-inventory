@@ -31,6 +31,7 @@ from app.core.permissions import Perm, has_perm
 from app.core.units import QTY_QUANT, UnitError, to_base
 from app.models import (
     AppSettings,
+    SalesImport,
     DocStatus,
     DocType,
     Inventory,
@@ -96,6 +97,12 @@ def _lock_products(db: Session, ids: Iterable[int], exclusive: bool = False) -> 
     if inactive:
         raise error(422, "Inactive products cannot be used in new documents", "inactive_product", product_ids=inactive)
     return found
+
+
+def _lock_products_any(db: Session, ids: Iterable[int]) -> dict[int, Product]:
+    """FOR SHARE like _lock_products, inactive products included (undoing a document must not depend on them)."""
+    rows = db.scalars(select(Product).where(Product.id.in_(sorted(set(ids)))).order_by(Product.id).with_for_update(read=True))
+    return {p.id: p for p in rows}
 
 
 def _check_locations(db: Session, ids: Iterable[int]) -> dict[int, Location]:
@@ -304,29 +311,32 @@ def post_receipt(db: Session, user: User, body: ReceiptIn, req_hash: str) -> Sto
     doc_date = body.doc_date or now
     check_date_bounds(doc_date, now)
     _check_locations(db, (line.location_id for line in body.lines))
-    rate = usd_rate(db) if body.price_currency == "USD" else None
+    priced = any(line.unit_price is not None for line in body.lines)
+    rate = usd_rate(db) if body.price_currency == "USD" and priced else None
     products = _lock_products(db, (line.product_id for line in body.lines), exclusive=True)
 
     lines, deltas, prices = [], [], []
     for i, line in enumerate(body.lines, 1):
         p = products[line.product_id]
         qty = _qty_base(line, p)
-        price = to_won(line.unit_price, rate)
-        if price >= Decimal("1e12"):
+        price = None if line.unit_price is None else to_won(line.unit_price, rate)
+        if price is not None and price >= Decimal("1e12"):
             raise error(422, "Price is too large", "invalid_value", product_id=p.id)
         prices.append(price)
-        cost = (price / p.unit_size).quantize(COST_QUANT)
+        cost = current_cost(p) if price is None else (price / p.unit_size).quantize(COST_QUANT)
         lines.append(StockDocumentLine(line_no=i, product_id=p.id, location_to_id=line.location_id, qty_base=qty, unit_price=price, unit_cost_base=cost))
         deltas.append(Delta(p.id, line.location_id, qty, cost))
 
     doc = _new_doc(body, DocType.receipt, user, doc_date, req_hash, supplier=body.supplier or None, invoice_no=body.invoice_no or None,
-                   price_rate=rate)
+                   price_rate=rate if priced else None)
     doc.lines = lines
     _post(db, user, doc, deltas, check_negative=False, pre_check=_backdate_hook(db, user, doc, body.confirm_backdate))
 
     # Latest price wins, but a backdated receipt never overrides a newer price (architecture section 4).
     for line, price in zip(body.lines, prices, strict=True):
         p = products[line.product_id]
+        if price is None:
+            continue  # a receipt without a price never changes the product's price
         if p.price_updated_at is None or doc_date >= p.price_updated_at:
             p.purchase_price = price
             p.price_updated_at = doc_date
@@ -385,8 +395,10 @@ def post_transfer(db: Session, user: User, body: TransferIn, req_hash: str) -> S
 
 
 def reverse(db: Session, user: User, original_id: uuid.UUID, body: ReverseIn, req_hash: str, *,
-            check_absorbed: bool = True) -> StockDocument:
-    """check_absorbed=False only for a caller that compensates the absorbed pairs itself (POS correction, reply 48)."""
+            check_absorbed: bool = True, from_sales_report: bool = False) -> StockDocument:
+    """check_absorbed=False only for a caller that compensates the absorbed pairs itself (POS correction, reply 48).
+    A POS report's write-off is undone only through the report (reply 50, P2): reversing it from the journal would
+    leave the report pointing at a cancelled document and, after a correction, break the counts."""
     orig = db.get(StockDocument, original_id, with_for_update=True)  # serializes concurrent reversals
     if orig is None:
         raise error(404, "Document not found", "not_found")
@@ -394,6 +406,8 @@ def reverse(db: Session, user: User, original_id: uuid.UUID, body: ReverseIn, re
         raise error(422, "Only posted receipts, write-offs and transfers can be reversed", "not_reversible")
     if db.scalar(select(exists().where(StockDocument.reversal_of == orig.id))):
         raise error(409, "This document has already been reversed", "already_reversed")
+    if not from_sales_report and db.scalar(select(exists().where(SalesImport.write_off_id == orig.id))):
+        raise error(409, "This write-off belongs to a POS sales report: correct or void it on the report's page", "use_sales_report")
 
     movements = list(db.scalars(select(StockMovement).where(StockMovement.document_id == orig.id).order_by(StockMovement.id)))
 

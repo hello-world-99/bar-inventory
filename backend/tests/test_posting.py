@@ -335,3 +335,22 @@ def test_stock_and_reconcile(client, db, admin_h, staff_h, world):
     assert len(rows) == 1 and Decimal(rows[0]["qty_base"]) == 1050 and Decimal(rows[0]["value"]) == 21
     assert client.get(f"{P}/stock/reconcile", headers=admin_h).json() == []
     assert client.get(f"{P}/stock/reconcile", headers=staff_h).status_code == 403
+
+
+def test_receipt_without_prices(client, db, admin_h, world):
+    """Owner, reply 59: no money in receipts. The cost is the product's price, which stays as it is."""
+    body = {"id": str(uuid.uuid4()), "lines": [{"product_id": world["vodka"], "location_id": world["main"], "qty": "2"}]}
+    r = client.post(f"{P}/receipts", json=body, headers=admin_h)
+    assert r.status_code == 201, r.text
+    line = r.json()["lines"][0]
+    assert line["unit_price"] is None and Decimal(line["unit_cost_base"]) == Decimal("0.020000")  # 14.00 per 700 ml bottle
+    assert balance(db, world["vodka"], world["main"]) == 1400
+    p = client.get(f"{P}/products/{world['vodka']}", headers=admin_h).json()
+    assert Decimal(p["purchase_price"]) == Decimal("14.00")
+    # a retry is the same request (absent and null price hash the same)
+    again = client.post(f"{P}/receipts", json=body | {"lines": [body["lines"][0] | {"unit_price": None}]}, headers=admin_h)
+    assert again.status_code == 200 and again.json()["id"] == body["id"]
+    assert balance(db, world["vodka"], world["main"]) == 1400
+    # a later priced receipt still updates the price
+    receipt(client, admin_h, world, qty="1", price="15.00")
+    assert Decimal(client.get(f"{P}/products/{world['vodka']}", headers=admin_h).json()["purchase_price"]) == Decimal("15.00")

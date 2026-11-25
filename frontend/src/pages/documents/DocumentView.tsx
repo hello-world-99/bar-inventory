@@ -1,12 +1,13 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
+import { Link } from "react-router-dom";
 import { useAuth } from "@/auth/AuthContext";
 import { Modal } from "@/components/Modal";
 import { Alert, Badge, Button, Field, Input } from "@/components/ui";
 import { api, ApiError } from "@/lib/api";
 import { errorMessage } from "@/lib/errors";
-import { useDateTime, useMoney, useQty } from "@/lib/format";
+import { useDateTime, useQty } from "@/lib/format";
 import type { StockDocument } from "@/lib/types";
 import { uuidv4 } from "@/lib/uuid";
 
@@ -55,7 +56,6 @@ export function DocumentView({ id, onClose }: { id: string; onClose: () => void 
   const { t } = useTranslation();
   const { can } = useAuth();
   const qc = useQueryClient();
-  const money = useMoney();
   const qty = useQty();
   const dt = useDateTime();
   const [docId, setDocId] = useState(id);
@@ -74,6 +74,11 @@ export function DocumentView({ id, onClose }: { id: string; onClose: () => void 
             {d.reversal_of && <Badge tone="amber">{t("docs.isReversal")}</Badge>}
             {d.allow_negative && <Badge tone="red">{t("docs.negativeAllowed")}</Badge>}
             {d.backdate_confirmed && <Badge tone="amber">{t("docs.backdated")}</Badge>}
+            {d.sales_import_id && (
+              <Link className="text-sm underline" to={`/sales/${d.sales_import_id}`} onClick={onClose}>
+                {t("docs.posCompensation")}
+              </Link>
+            )}
           </div>
           <dl className="grid grid-cols-2 gap-x-4 gap-y-3 text-sm sm:grid-cols-3">
             <div>
@@ -117,7 +122,6 @@ export function DocumentView({ id, onClose }: { id: string; onClose: () => void 
                   <th className="px-3 py-2 font-medium">{t("products.name")}</th>
                   <th className="px-3 py-2 font-medium">{t("docs.location")}</th>
                   <th className="px-3 py-2 text-right font-medium">{t("docs.qty")}</th>
-                  <th className="px-3 py-2 text-right font-medium">{t("docs.amount")}</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-zinc-100">
@@ -133,7 +137,6 @@ export function DocumentView({ id, onClose }: { id: string; onClose: () => void 
                         <div className="font-medium">{l.product_name}</div>
                         <div className="text-xs text-zinc-500">
                           {l.product_sku}
-                          {l.unit_price && ` · ${money(l.unit_price)} / ${t(`units.short.${l.unit}`)}`}
                         </div>
                       </td>
                       <td className="px-3 py-2">{where}</td>
@@ -141,19 +144,10 @@ export function DocumentView({ id, onClose }: { id: string; onClose: () => void 
                         {f.main}
                         {f.alt && <div className="text-xs text-zinc-500">{f.alt}</div>}
                       </td>
-                      <td className="px-3 py-2 text-right tabular-nums">{money(l.amount)}</td>
                     </tr>
                   );
                 })}
               </tbody>
-              <tfoot>
-                <tr className="bg-zinc-50 font-semibold">
-                  <td colSpan={3} className="px-3 py-2">
-                    {t("products.total")}
-                  </td>
-                  <td className="px-3 py-2 text-right tabular-nums">{money(d.total_amount)}</td>
-                </tr>
-              </tfoot>
             </table>
           </div>
 
@@ -168,7 +162,8 @@ export function DocumentView({ id, onClose }: { id: string; onClose: () => void 
                 {t("docs.openReversal")}
               </Button>
             )}
-            {can("reverse_document") && REVERSIBLE.has(d.type) && !d.reversed_by && (
+            {/* a POS write-off is corrected or voided on its report (reply 50) */}
+            {can("reverse_document") && REVERSIBLE.has(d.type) && !d.reversed_by && d.reason !== "sales" && (
               <Button variant="danger" onClick={() => setReversing(true)}>
                 {t("docs.reverse")}
               </Button>

@@ -361,24 +361,74 @@ def post(db: Session, user: User, import_id: uuid.UUID, body: PostIn) -> SalesIm
     return imp
 
 
-def _reverse_write_off(db: Session, user: User, imp: SalesImport, reversal_id: uuid.UUID, comment: str, what: str) -> None:
-    rev = ReverseIn(id=reversal_id, comment=comment)
-    h = posting.request_hash("reversal", ReverseKey(original=imp.write_off_id, body=rev))
-    try:
-        posting.reverse(db, user, imp.write_off_id, rev, h)
-    except HTTPException as e:
-        if isinstance(e.detail, dict) and e.detail.get("code") == "counted_after":
-            raise error(409, f"An inventory completed after this write-off already counted this stock, so the day cannot "
-                             f"be {what}. Correct the stock with a new inventory if needed.", "counted_after",
-                        **{k: v for k, v in e.detail.items() if k not in ("code", "message")}) from None
-        raise
-
-
 def _written_off(db: Session, imp: SalesImport) -> dict[int, Decimal]:
     if imp.write_off_id is None:
         return {}
     rows = db.execute(select(StockDocumentLine.product_id, StockDocumentLine.qty_base).where(StockDocumentLine.document_id == imp.write_off_id))
     return {pid: Decimal(q) for pid, q in rows}
+
+
+def _rewrite(db: Session, user: User, imp: SalesImport, old: dict[int, Decimal], target: dict[int, Decimal],
+             price_in: dict[int, Decimal], old_cost: dict[int, Decimal], reversal_id: uuid.UUID, document_id: uuid.UUID | None,
+             allow_negative: bool, comment: str):
+    """Replace the day's write-off `old` by `target` (empty: void) in one transaction (replies 48 and 50):
+    1. reverse the old write-off (the absorption check is skipped: counted pairs are compensated in step 2);
+    2. compensate every product an inventory counted after the sales by (target - old) at the earliest affected
+       count, so each count still sees exactly what it saw and the stock after it stays as counted;
+    3. post the new write-off at the start of the day (none for a void).
+    Shared by correct() and void() so they cannot drift apart. Returns (new write-off or None, covered, costs)."""
+    moment = day_start(db, imp.sales_date)
+    loc = imp.location_id
+    involved = set(target) | set(old)
+    # lock order as everywhere: products FOR SHARE, then balances; coverage is decided under these locks
+    products = posting._lock_products_any(db, involved) if not target else posting._lock_products(db, involved)
+    posting._lock_balances(db, [(pid, loc) for pid in involved])
+    covered = covered_pairs(db, moment, loc, involved)
+    costs = {
+        pid: (price_in[pid] / products[pid].unit_size).quantize(posting.COST_QUANT) if pid in price_in
+        else old_cost[pid] if pid in old_cost else posting.current_cost(products[pid])
+        for pid in involved
+    }
+    comp = {pid: (target.get(pid, Decimal(0)) - old.get(pid, Decimal(0))).quantize(QTY_QUANT) for pid in involved if pid in covered}
+    comp = {pid: d for pid, d in comp.items() if d != 0}
+
+    rev = ReverseIn(id=reversal_id, comment=comment)
+    posting.reverse(db, user, imp.write_off_id, rev, posting.request_hash("reversal", ReverseKey(original=imp.write_off_id, body=rev)),
+                    check_absorbed=False, from_sales_report=True)
+    if comp:  # before the new write-off, so the running balance never dips falsely
+        at = min(covered[pid][1] for pid in comp)
+        inv_ids = sorted({covered[pid][0] for pid in comp})
+        doc = StockDocument(
+            id=uuid.uuid5(document_id or reversal_id, "compensation"),
+            type=DocType.inventory_adjustment,
+            doc_date=at,
+            comment=f"{comment} after inventory " + ", ".join(f"#{i}" for i in inv_ids) + ": the counted stock stays as counted",
+            created_by=user.id,
+            allow_negative=False,
+            sales_import_id=imp.id,
+        )
+        doc.lines = [
+            StockDocumentLine(line_no=i, product_id=pid, location_from_id=None if d > 0 else loc, location_to_id=loc if d > 0 else None,
+                              qty_base=d, unit_cost_base=costs[pid])
+            for i, (pid, d) in enumerate(sorted(comp.items()), 1)
+        ]
+        posting._post(db, user, doc, [posting.Delta(pid, loc, d, costs[pid]) for pid, d in sorted(comp.items())], check_negative=False)
+    new = None
+    if target:
+        wo = WriteOffIn(
+            id=document_id,
+            doc_date=moment,
+            comment=f"POS sales {imp.sales_date.isoformat()} (corrected)" + (f", file {imp.file_name}" if imp.file_name else ""),
+            reason=WriteOffReason.sales,
+            allow_negative=allow_negative,
+            lines=[
+                WriteOffLineIn(product_id=pid, qty=qty, qty_unit=Unit(products[pid].base_unit.value), location_id=loc)
+                for pid, qty in sorted(target.items())
+            ],
+        )
+        new = posting.post_write_off(db, user, wo, posting.request_hash("sales_write_off", wo), pre_check=lambda _pairs: None,
+                                     cost_overrides={pid: costs[pid] for pid in target})
+    return new, covered, costs
 
 
 def correct(db: Session, user: User, import_id: uuid.UUID, body: CorrectIn) -> SalesImport:
@@ -427,59 +477,8 @@ def correct(db: Session, user: User, import_id: uuid.UUID, body: CorrectIn) -> S
     if not target:
         raise error(422, "Nothing would be written off; to cancel the whole day use Void", "nothing_to_write_off")
 
-    moment = day_start(db, imp.sales_date)
-    loc = imp.location_id
-    involved = set(target) | set(old)
-    # lock order as everywhere: products FOR SHARE, then balances; coverage is decided under these locks
-    products = posting._lock_products(db, involved)
-    posting._lock_balances(db, [(pid, loc) for pid in involved])
-    covered = covered_pairs(db, moment, loc, involved)
-    costs = {
-        pid: (price_in[pid] / products[pid].unit_size).quantize(posting.COST_QUANT) if pid in price_in
-        else old_cost[pid] if pid in old_cost else posting.current_cost(products[pid])
-        for pid in involved
-    }
-    comp = {pid: (target.get(pid, Decimal(0)) - old.get(pid, Decimal(0))).quantize(QTY_QUANT) for pid in involved if pid in covered}
-    comp = {pid: d for pid, d in comp.items() if d != 0}
-
-    # 1. reverse the old write-off (its counted pairs are compensated below, so the absorption check is skipped)
-    rev = ReverseIn(id=body.reversal_id, comment=f"Correction of POS sales {imp.sales_date.isoformat()}")
-    posting.reverse(db, user, imp.write_off_id, rev, posting.request_hash("reversal", ReverseKey(original=imp.write_off_id, body=rev)),
-                    check_absorbed=False)
-    # 2. compensation at the count: posted before the new write-off so the running balance never dips falsely
-    if comp:
-        at = min(covered[pid][1] for pid in comp)
-        inv_ids = sorted({covered[pid][0] for pid in comp})
-        doc = StockDocument(
-            id=uuid.uuid5(body.document_id, "compensation"),
-            type=DocType.inventory_adjustment,
-            doc_date=at,
-            comment=f"Correction of POS sales {imp.sales_date.isoformat()} after inventory "
-                    + ", ".join(f"#{i}" for i in inv_ids) + ": the counted stock stays as counted",
-            created_by=user.id,
-            allow_negative=False,
-            sales_import_id=imp.id,
-        )
-        doc.lines = [
-            StockDocumentLine(line_no=i, product_id=pid, location_from_id=None if d > 0 else loc, location_to_id=loc if d > 0 else None,
-                              qty_base=d, unit_cost_base=costs[pid])
-            for i, (pid, d) in enumerate(sorted(comp.items()), 1)
-        ]
-        posting._post(db, user, doc, [posting.Delta(pid, loc, d, costs[pid]) for pid, d in sorted(comp.items())], check_negative=False)
-    # 3. the corrected write-off
-    wo = WriteOffIn(
-        id=body.document_id,
-        doc_date=moment,
-        comment=f"POS sales {imp.sales_date.isoformat()} (corrected)" + (f", file {imp.file_name}" if imp.file_name else ""),
-        reason=WriteOffReason.sales,
-        allow_negative=body.allow_negative,
-        lines=[
-            WriteOffLineIn(product_id=pid, qty=qty, qty_unit=Unit(products[pid].base_unit.value), location_id=loc)
-            for pid, qty in sorted(target.items())
-        ],
-    )
-    new = posting.post_write_off(db, user, wo, posting.request_hash("sales_write_off", wo), pre_check=lambda _pairs: None,
-                                 cost_overrides={pid: costs[pid] for pid in target})
+    new, covered, costs = _rewrite(db, user, imp, old, target, price_in, old_cost, body.reversal_id, body.document_id,
+                                   body.allow_negative, f"Correction of POS sales {imp.sales_date.isoformat()}")
     for p in usage.parts:
         if p.product_id in target:
             p.unit_cost_base = costs[p.product_id]
@@ -504,11 +503,16 @@ def set_prepared_by(db: Session, user: User, import_id: uuid.UUID, prepared_by: 
 
 
 def void(db: Session, user: User, import_id: uuid.UUID, body: VoidIn) -> SalesImport:
+    """Cancel the day. A written-off day is rewritten to nothing: its write-off is reversed and the products an
+    inventory counted after the sales are compensated, so the counts stay true (reply 50)."""
     imp = _lock(db, import_id)
     if imp.status == SalesImportStatus.voided:
         return imp
     if imp.status == SalesImportStatus.posted:
-        _reverse_write_off(db, user, imp, body.reversal_id, f"Void of POS sales {imp.sales_date.isoformat()}", "voided")
+        usage = compute_usage(db, imp)
+        old_cost = {p.product_id: p.unit_cost_base for p in usage.parts if p.unit_cost_base is not None}
+        _rewrite(db, user, imp, _written_off(db, imp), {}, {}, old_cost, body.reversal_id, None, False,
+                 f"Void of POS sales {imp.sales_date.isoformat()}")
     imp.status = SalesImportStatus.voided
     imp.closed_by, imp.closed_at = user.id, posting.db_now(db)
     db.flush()

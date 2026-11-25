@@ -8,7 +8,8 @@ The file is untrusted input, read with the standard library only (reply 32; repl
     the workbook, its relationships, the first worksheet, shared strings and core properties are read;
   * formulas in the columns we use are refused: values must be what the POS exported.
 
-Columns are found by their header text, not by letter. The total row (합계) is skipped and used as a check.
+Columns are found by their header text, not by letter. The Korean strings below are the literal headers of the
+POS export (code, item name, quantity, revenue, total row) and must stay as they are. The total row (합계) is skipped and used as a check.
 Every problem is a ParseError with a machine-readable code; the API turns it into a 422.
 """
 

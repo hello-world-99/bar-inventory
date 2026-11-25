@@ -57,12 +57,10 @@ export function StockPage() {
           );
         },
       },
-      { id: "value", header: t("products.value"), meta: { align: "right" }, accessorFn: (r) => Number(r.value), cell: ({ row: { original: r } }) => money(r.value) },
     ],
     [t, qty, money, catName],
   );
 
-  const total = (rows.data ?? []).reduce((s, r) => s.plus(r.value), new Big(0));
 
   return (
     <>
@@ -97,7 +95,6 @@ export function StockPage() {
         initialSort={[{ id: "product", desc: false }]}
         empty={t("stock.empty")}
       />
-      {rows.data && <p className="mt-3 text-sm text-zinc-500">{t("stock.total", { value: money(total.toString()) })}</p>}
     </>
   );
 }

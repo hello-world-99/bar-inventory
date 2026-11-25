@@ -29,8 +29,7 @@ export function DashboardPage() {
         !q.error && <p className="text-sm text-zinc-500">{t("common.loading")}</p>
       ) : (
         <div className="space-y-6">
-          <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-            <Stat label={t("dashboard.stockValue")} value={money(d.stock_value)} hint={t("dashboard.stockValueHint")} />
+          <div className="grid grid-cols-2 gap-3 lg:grid-cols-3">
             <Stat
               label={t("dashboard.products")}
               value={String(d.product_count)}
@@ -67,7 +66,6 @@ export function DashboardPage() {
                         </div>
                         <div className="text-xs text-zinc-500">{t("dashboard.positions", { count: l.product_count })}</div>
                       </div>
-                      <div className="text-sm tabular-nums">{money(l.value)}</div>
                     </li>
                   ))}
                 </ul>
@@ -188,7 +186,6 @@ function Empty({ children }: { children: ReactNode }) {
 
 function DocList({ docs, onOpen, detail }: { docs: DocSummary[]; onOpen: (id: string) => void; detail: (d: DocSummary) => string }) {
   const { t } = useTranslation();
-  const money = useMoney();
   const dt = useDateTime();
   if (docs.length === 0) return <Empty>{t("dashboard.nothingYet")}</Empty>;
   return (
@@ -205,7 +202,6 @@ function DocList({ docs, onOpen, detail }: { docs: DocSummary[]; onOpen: (id: st
                 {[detail(x), t("dashboard.lines", { count: x.line_count }), x.created_by_name].filter(Boolean).join(" · ")}
               </div>
             </div>
-            <div className="text-sm tabular-nums">{money(x.total_amount)}</div>
           </button>
         </li>
       ))}

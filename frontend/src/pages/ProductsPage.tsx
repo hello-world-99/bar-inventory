@@ -261,7 +261,7 @@ function ProductView({ id, onClose }: { id: number; onClose: () => void }) {
               <div className="flex items-center justify-between bg-zinc-50 px-3 py-2 text-sm font-semibold">
                 <span>{t("products.total")}</span>
                 <span className="text-right tabular-nums">
-                  {fmt(p.total_qty_base, p).main} · {money(p.stock_value)}
+                  {fmt(p.total_qty_base, p).main}
                 </span>
               </div>
             </div>
@@ -328,12 +328,10 @@ export function ProductsPage() {
         ),
       },
       { id: "price", header: t("products.price"), meta: { align: "right" }, accessorFn: (p) => Number(p.purchase_price), cell: ({ row: { original: p } }) => `${money(p.purchase_price)} / ${t(`units.short.${p.unit}`)}` },
-      { id: "value", header: t("products.value"), meta: { align: "right" }, accessorFn: (p) => Number(p.stock_value), cell: ({ getValue }) => money(getValue() as number) },
     ],
     [t, money, catName],
   );
 
-  const totalValue = (products.data?.items ?? []).reduce((s, p) => s.plus(p.stock_value), new Big(0));
 
   return (
     <>
@@ -376,7 +374,7 @@ export function ProductsPage() {
       />
       {products.data && (
         <p className="mt-3 text-sm text-zinc-500">
-          {t("products.summary", { count: products.data.total, value: money(totalValue.toString()) })}
+          {t("products.summary", { count: products.data.total })}
         </p>
       )}
       {creating && (

@@ -30,7 +30,9 @@ class QtyIn(BaseModel):
 
 class ReceiptLineIn(QtyIn):
     location_id: int
-    unit_price: Money  # per product unit, exactly as on the invoice
+    # Per product unit, as on the invoice. Optional (owner, reply 59: no money in receipts): without it the cost is
+    # the product's current price and the price is left unchanged.
+    unit_price: Money | None = None
 
 
 class WriteOffLineIn(QtyIn):
@@ -101,6 +103,7 @@ class DocLineOut(BaseModel):
 
 class DocOut(BaseModel):
     price_rate: Decimal | None = None  # receipts priced in dollars: won per dollar used
+    sales_import_id: uuid.UUID | None = None  # compensation of a POS report corrected after an inventory
     id: uuid.UUID
     type: DocType
     status: DocStatus

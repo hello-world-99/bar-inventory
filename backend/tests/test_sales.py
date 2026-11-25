@@ -378,7 +378,9 @@ def test_upload_before_completing_the_count_gives_a_zero_difference(client, db, 
     assert balance(db, kitchen["KIT-FRIES"], kitchen["loc"]) == 7975
 
 
-def test_void_after_the_day_was_counted_is_refused_with_a_clear_error(client, db, admin, admin_h, staff_h, kitchen):
+def test_void_after_the_day_was_counted_keeps_the_count(client, db, admin, admin_h, staff_h, kitchen):
+    """Reply 50: voiding a day counted afterwards returns the sales at the start of the day and takes them back at
+    the count, so the count still sees what it saw."""
     stock_up(client, admin_h, kitchen, FULL_STOCK)
     rep = upload(client, staff_h).json()
     post(client, staff_h, rep, kitchen["loc"], acknowledge_unmapped=True)
@@ -386,8 +388,11 @@ def test_void_after_the_day_was_counted_is_refused_with_a_clear_error(client, db
     count(client, admin_h, inv, kitchen["KIT-FRIES"], [(7975, "g")])
     complete(client, admin_h, inv)
     r = client.post(f"{P}/sales-imports/{rep['id']}/void", json={"reversal_id": str(uuid.uuid4())}, headers=admin_h)
-    assert r.status_code == 409 and r.json()["detail"]["code"] == "counted_after"
-    assert "cannot be voided" in r.json()["detail"]["message"]
+    assert r.status_code == 200 and r.json()["status"] == "voided"
+    assert balance(db, kitchen["KIT-FRIES"], kitchen["loc"]) == 7975  # counted: stays
+    assert balance(db, kitchen["KIT-WINGS"], kitchen["loc"]) == FULL_STOCK["KIT-WINGS"]  # not counted: back
+    assert_counts_hold(db)
+    assert_journal_consistent(db)
 
 
 def test_pending_days_before_completing_an_inventory(client, db, admin_h, staff_h, kitchen):
@@ -652,3 +657,61 @@ def test_who_prepared_the_report(client, db, admin_h, staff_h, kitchen, staff):
     r = client.post(f"{P}/sales-imports", params={"id": str(uuid.uuid4()), "sales_date": "2026-01-01", "prepared_by": "x" * 101},
                     content=DAY_FILE, headers=staff_h | {"Content-Type": XLSX})
     assert r.status_code == 422
+
+
+
+def assert_counts_hold(db):
+    """Reply 50: every completed count still sees exactly what it saw."""
+    bad = db.execute(text(
+        "SELECT l.inventory_id, l.product_id FROM inventory_lines l JOIN inventories i ON i.id = l.inventory_id "
+        "WHERE i.status = 'completed' AND l.counted_base IS NOT NULL AND l.expected_at_count_base <> ("
+        "  SELECT coalesce(sum(m.delta_base), 0) FROM stock_movements m "
+        "  WHERE m.product_id = l.product_id AND m.location_id = i.location_id AND m.doc_date <= l.counted_at)"
+    )).all()
+    assert bad == []
+
+
+def test_void_after_corrections_after_a_count(client, db, admin_h, staff_h, kitchen):
+    """Reply 50, S9 with void: two corrections after a count, then the whole day voided."""
+    stock_up(client, admin_h, kitchen, FULL_STOCK)
+    rep = upload(client, staff_h).json()
+    post(client, staff_h, rep, kitchen["loc"], acknowledge_unmapped=True)
+    inv = start(client, admin_h, {"main": kitchen["loc"]}, "main")
+    count(client, admin_h, inv, kitchen["KIT-FRIES"], [(7900, "g")])
+    complete(client, admin_h, inv)
+    for lines in ([{"product_id": kitchen["KIT-FRIES"], "qty_base": "2100"}, {"product_id": kitchen["KIT-FISH"], "qty_base": "2"}],
+                  [{"product_id": kitchen["KIT-FRIES"], "qty_base": "2025"}]):
+        body = {"document_id": str(uuid.uuid4()), "reversal_id": str(uuid.uuid4()), "lines": lines}
+        assert client.post(f"{P}/sales-imports/{rep['id']}/correct", json=body, headers=admin_h).status_code == 200
+        assert_counts_hold(db)
+    r = client.post(f"{P}/sales-imports/{rep['id']}/void", json={"reversal_id": str(uuid.uuid4())}, headers=admin_h)
+    assert r.status_code == 200, r.text
+    assert balance(db, kitchen["KIT-FRIES"], kitchen["loc"]) == 7900  # was 9925 before the fix
+    assert balance(db, kitchen["KIT-FISH"], kitchen["loc"]) == FULL_STOCK["KIT-FISH"]
+    assert_counts_hold(db)
+    assert_journal_consistent(db)
+    assert upload(client, staff_h).status_code == 201  # the day is free again
+
+
+def test_pos_write_off_cannot_be_reversed_from_the_journal(client, db, admin_h, staff_h, kitchen):
+    """Reply 50, S12: it would leave the report stuck; the report has Edit and Void for that."""
+    stock_up(client, admin_h, kitchen, FULL_STOCK)
+    rep = upload(client, staff_h).json()
+    done = post(client, staff_h, rep, kitchen["loc"], acknowledge_unmapped=True).json()
+    r = client.post(f"{P}/documents/{done['write_off_id']}/reverse", json={"id": str(uuid.uuid4())}, headers=admin_h)
+    assert r.status_code == 409 and r.json()["detail"]["code"] == "use_sales_report"
+    assert client.post(f"{P}/sales-imports/{rep['id']}/void", json={"reversal_id": str(uuid.uuid4())}, headers=admin_h).status_code == 200
+
+
+def test_compensation_document_points_to_its_report(client, db, admin_h, staff_h, kitchen):
+    stock_up(client, admin_h, kitchen, FULL_STOCK)
+    rep = upload(client, staff_h).json()
+    post(client, staff_h, rep, kitchen["loc"], acknowledge_unmapped=True)
+    inv = start(client, admin_h, {"main": kitchen["loc"]}, "main")
+    count(client, admin_h, inv, kitchen["KIT-FRIES"], [(7975, "g")])
+    complete(client, admin_h, inv)
+    body = {"document_id": str(uuid.uuid4()), "reversal_id": str(uuid.uuid4()), "lines": [{"product_id": kitchen["KIT-FRIES"], "qty_base": "2000"}]}
+    client.post(f"{P}/sales-imports/{rep['id']}/correct", json=body, headers=admin_h)
+    comp_id = db.execute(text("SELECT id FROM stock_documents WHERE sales_import_id = :i"), {"i": rep["id"]}).scalar()
+    doc = client.get(f"{P}/documents/{comp_id}", headers=admin_h).json()
+    assert doc["sales_import_id"] == rep["id"] and doc["type"] == "inventory_adjustment"

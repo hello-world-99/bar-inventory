@@ -84,6 +84,7 @@ def doc_out(db: Session, doc: StockDocument) -> DocOut:
         )
     return DocOut(
         price_rate=doc.price_rate,
+        sales_import_id=doc.sales_import_id,
         id=doc.id, type=doc.type, status=doc.status, doc_date=doc.doc_date, reason=doc.reason, supplier=doc.supplier,
         invoice_no=doc.invoice_no, comment=doc.comment, reversal_of=doc.reversal_of,
         reversed_by=db.scalar(select(StockDocument.id).where(StockDocument.reversal_of == doc.id)),

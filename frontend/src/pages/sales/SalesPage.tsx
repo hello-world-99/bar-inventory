@@ -48,24 +48,32 @@ function UploadCard({ defaultDate }: { defaultDate: string }) {
   };
   return (
     <Card className="mb-6 p-4">
-      <form onSubmit={submit} className="grid gap-4 sm:grid-cols-[1fr_12rem_10rem_auto] sm:items-end">
-        <Field label={t("sales.file")} hint={t("sales.fileHint")}>
-          <Input
-            type="file"
-            accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-            onChange={(e) => {
-              setFile(e.target.files?.[0] ?? null);
-              setId(uuidv4());
-              up.reset();
-            }}
-            required
-          />
-        </Field>
-        <Field label={t("sales.preparedBy")} hint={t("sales.preparedByHint")}>
-          <Input value={preparedBy} maxLength={100} onChange={(e) => setPreparedBy(e.target.value)} />
+      {/* One row on wide screens; every field is "label + control" with no hint, so the controls line up (hints below). */}
+      <form onSubmit={submit} className="grid items-end gap-4 sm:grid-cols-2 lg:grid-cols-[minmax(0,1fr)_12rem_11rem_auto]">
+        <div className="space-y-1.5">
+          <span className="block text-sm font-medium text-zinc-700">{t("sales.file")}</span>
+          {/* The browser's own file input is labelled in the OS language; this one is always English. */}
+          <label className="flex h-10 w-full cursor-pointer items-center gap-3 rounded-lg border border-zinc-300 bg-white px-1.5 text-sm hover:bg-zinc-50 focus-within:border-zinc-900 focus-within:ring-1 focus-within:ring-zinc-900">
+            <input
+              type="file"
+              className="sr-only"
+              accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+              onChange={(e) => {
+                setFile(e.target.files?.[0] ?? null);
+                setId(uuidv4());
+                up.reset();
+              }}
+            />
+            <span className="shrink-0 rounded-md bg-zinc-100 px-2.5 py-1 font-medium text-zinc-800">{t("sales.chooseFile")}</span>
+            <span className={file ? "min-w-0 truncate text-zinc-800" : "min-w-0 truncate text-zinc-500"}>{file ? file.name : t("sales.noFileChosen")}</span>
+          </label>
+        </div>
+        <Field label={t("sales.preparedBy")}>
+          <Input className="h-10" value={preparedBy} maxLength={100} onChange={(e) => setPreparedBy(e.target.value)} />
         </Field>
         <Field label={t("sales.salesDate")}>
           <Input
+            className="h-10"
             type="date"
             value={day}
             onChange={(e) => {
@@ -76,11 +84,13 @@ function UploadCard({ defaultDate }: { defaultDate: string }) {
             required
           />
         </Field>
-        <Button type="submit" disabled={!file || !day || up.isPending}>
+        <Button type="submit" className="h-10" disabled={!file || !day || up.isPending}>
           <Upload className="h-4 w-4" /> {up.isPending ? t("common.loading") : t("sales.upload")}
         </Button>
       </form>
-      <p className="mt-2 text-xs text-zinc-500">{t("sales.dateHint")}</p>
+      <p className="mt-2 text-xs text-zinc-500">
+        {t("sales.fileHint")}. {t("sales.preparedByHint")}. {t("sales.dateHint")}
+      </p>
       {up.error && (
         <div className="mt-3">
           <Alert>

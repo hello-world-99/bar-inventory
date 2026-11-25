@@ -1,5 +1,4 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import Big from "big.js";
 import { Plus, Trash2 } from "lucide-react";
 import { useState, type FormEvent, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
@@ -7,10 +6,10 @@ import { LocationSelect, ProductPicker, QtyField, useActiveLocations, useActiveP
 import { Alert, Button, Field, Input, Select } from "@/components/ui";
 import { api, ApiError } from "@/lib/api";
 import { errorMessage } from "@/lib/errors";
-import { useAppSettings, useCurrency, useQty } from "@/lib/format";
+import { useAppSettings, useQty } from "@/lib/format";
 import { nowLocalIn, zonedLocalToIso } from "@/lib/tz";
 import { WRITE_OFF_REASONS, type Location, type Product, type StockDocument, type WriteOffReason } from "@/lib/types";
-import { plain, toBase, type Unit } from "@/lib/units";
+import { toBase, type Unit } from "@/lib/units";
 import { uuidv4 } from "@/lib/uuid";
 
 interface Line {
@@ -19,10 +18,9 @@ interface Line {
   location_id: number | null;
   qty: string;
   qty_unit: Unit | null;
-  unit_price: string;
 }
 
-const newLine = (location_id: number | null = null): Line => ({ key: uuidv4(), product_id: null, location_id, qty: "", qty_unit: null, unit_price: "" });
+const newLine = (location_id: number | null = null): Line => ({ key: uuidv4(), product_id: null, location_id, qty: "", qty_unit: null });
 const isNum = (s: string) => /^\d+(\.\d+)?$/.test(s.trim());
 
 /**
@@ -95,12 +93,11 @@ function SubmitBar({ pending, needsNegative, needsBackdate, onSubmit, onCancel, 
   );
 }
 
-function LineRow({ line, products, locations, showLocation, showPrice, onChange, onRemove, stockHint }: {
-  line: Line; products: Product[]; locations: Location[]; showLocation: boolean; showPrice: boolean;
+function LineRow({ line, products, locations, showLocation, onChange, onRemove, stockHint }: {
+  line: Line; products: Product[]; locations: Location[]; showLocation: boolean;
   onChange: (l: Line) => void; onRemove?: () => void; stockHint?: ReactNode;
 }) {
   const { t } = useTranslation();
-  const cur = useCurrency();
   const p = products.find((x) => x.id === line.product_id) ?? null;
   let base: string | null = null;
   try {
@@ -109,14 +106,10 @@ function LineRow({ line, products, locations, showLocation, showPrice, onChange,
     base = null;
   }
   const fmt = useQty();
-  // The price is always per product unit (e.g. per bottle), even when the quantity is entered in l or ml.
-  const priceLabel = p ? t("products.pricePer", { unit: t(`units.one.${p.unit}`) }) : t("docs.unitPrice");
-  // line.unit_price is in the display currency (dollars are converted to won on the server, reply 34)
-  const amount = p && isNum(line.qty) && isNum(line.unit_price) && base ? new Big(base).div(p.unit_size).times(line.unit_price) : null;
   return (
     <div className="grid gap-3 rounded-lg border border-zinc-200 p-3 sm:grid-cols-12 sm:items-start">
       <div className="sm:col-span-4">
-        <ProductPicker products={products} value={line.product_id} onChange={(np) => onChange({ ...line, product_id: np.id, qty_unit: np.unit, unit_price: line.unit_price || (showPrice ? plain(cur.toDisplay(np.purchase_price), cur.decimals) : "") })} />
+        <ProductPicker products={products} value={line.product_id} onChange={(np) => onChange({ ...line, product_id: np.id, qty_unit: np.unit })} />
         {stockHint}
       </div>
       {showLocation && (
@@ -128,12 +121,6 @@ function LineRow({ line, products, locations, showLocation, showPrice, onChange,
         <QtyField product={p} qty={line.qty} unit={line.qty_unit} onChange={(qty, qty_unit) => onChange({ ...line, qty, qty_unit })} />
         {p && base && (line.qty_unit ?? p.unit) !== p.unit && <p className="mt-1 text-xs text-zinc-500">= {fmt(base, p).main}</p>}
       </div>
-      {showPrice && (
-        <div className="sm:col-span-2">
-          <Input inputMode="decimal" placeholder={priceLabel} aria-label={priceLabel} title={priceLabel} value={line.unit_price} onChange={(e) => onChange({ ...line, unit_price: e.target.value.replace(",", ".") })} required />
-          <p className="mt-1 text-xs text-zinc-500">{p ? `${t("docs.per")} ${t(`units.one.${p.unit}`)}` : ""}{amount ? ` · = ${cur.format(amount)}` : ""}</p>
-        </div>
-      )}
       {onRemove && (
         <button type="button" onClick={onRemove} aria-label={t("docs.removeLine")} className="justify-self-end rounded-lg p-2 text-zinc-500 hover:bg-zinc-100 sm:col-span-1 sm:col-start-12 sm:row-start-1">
           <Trash2 className="h-4 w-4" />
@@ -143,12 +130,11 @@ function LineRow({ line, products, locations, showLocation, showPrice, onChange,
   );
 }
 
-function validate(lines: Line[], needLocation: boolean, needPrice: boolean, t: (k: string) => string): string | null {
+function validate(lines: Line[], needLocation: boolean, t: (k: string) => string): string | null {
   for (const l of lines) {
     if (!l.product_id) return t("docs.errors.product");
     if (needLocation && !l.location_id) return t("docs.errors.location");
     if (!isNum(l.qty) || Number(l.qty) <= 0) return t("docs.errors.qty");
-    if (needPrice && !isNum(l.unit_price)) return t("docs.errors.price");
   }
   return null;
 }
@@ -173,7 +159,6 @@ function useLines(initialLocation: number | null = null) {
 // --------------------------------------------------------------------- receipt
 export function ReceiptForm({ onDone, onCancel }: { onDone: (d: StockDocument) => void; onCancel: () => void }) {
   const { t } = useTranslation();
-  const cur = useCurrency();
   const products = useActiveProducts().data ?? [];
   const locations = useActiveLocations().data ?? [];
   const { lines, update, add, remove } = useLines();
@@ -185,23 +170,15 @@ export function ReceiptForm({ onDone, onCancel }: { onDone: (d: StockDocument) =
   const { m, needsBackdate } = useDocSubmit("/receipts", onDone);
   const tz = useTimeZone();
 
-  const total = lines.reduce((s, l) => {
-    const p = products.find((x) => x.id === l.product_id);
-    try {
-      return p && isNum(l.qty) && isNum(l.unit_price) ? s.plus(toBase(l.qty, l.qty_unit ?? p.unit, p).div(p.unit_size).times(l.unit_price)) : s;
-    } catch {
-      return s;
-    }
-  }, new Big(0));
 
   function send(confirm = false) {
-    const err = validate(lines, true, true, t);
+    const err = validate(lines, true, t);
     setLocalErr(err);
     if (err) return;
     m.mutate({
       supplier: supplier || null, invoice_no: invoice || null, comment, doc_date: isoOrUndefined(date, tz), confirm_backdate: confirm,
-      price_currency: cur.code,
-      lines: lines.map((l) => ({ product_id: l.product_id, location_id: l.location_id, qty: l.qty, qty_unit: l.qty_unit, unit_price: l.unit_price })),
+      // no prices in receipts (owner, reply 59): the server uses the product's price as the cost
+      lines: lines.map((l) => ({ product_id: l.product_id, location_id: l.location_id, qty: l.qty, qty_unit: l.qty_unit })),
     });
   }
 
@@ -219,13 +196,12 @@ export function ReceiptForm({ onDone, onCancel }: { onDone: (d: StockDocument) =
       <div className="space-y-2">
         <h3 className="text-sm font-semibold">{t("docs.lines")}</h3>
         {lines.map((l, i) => (
-          <LineRow key={l.key} line={l} products={products} locations={locations} showLocation showPrice onChange={(x) => update(i, x)} onRemove={lines.length > 1 ? () => remove(i) : undefined} />
+          <LineRow key={l.key} line={l} products={products} locations={locations} showLocation onChange={(x) => update(i, x)} onRemove={lines.length > 1 ? () => remove(i) : undefined} />
         ))}
         <div className="flex items-center justify-between">
           <Button variant="ghost" onClick={add}>
             <Plus className="h-4 w-4" /> {t("docs.addLine")}
           </Button>
-          <span className="text-sm font-semibold tabular-nums">{t("products.total")}: {cur.format(total)}</span>
         </div>
       </div>
       <SubmitBar pending={m.isPending} needsNegative={false} needsBackdate={needsBackdate} onCancel={onCancel} onOverride={() => send(true)} />
@@ -247,7 +223,7 @@ export function WriteOffForm({ onDone, onCancel }: { onDone: (d: StockDocument) 
   const tz = useTimeZone();
 
   function send(override = false) {
-    const err = !reason ? t("docs.errors.reason") : validate(lines, true, false, t);
+    const err = !reason ? t("docs.errors.reason") : validate(lines, true, t);
     setLocalErr(err);
     if (err) return;
     m.mutate({
@@ -278,7 +254,7 @@ export function WriteOffForm({ onDone, onCancel }: { onDone: (d: StockDocument) 
       <div className="space-y-2">
         <h3 className="text-sm font-semibold">{t("docs.lines")}</h3>
         {lines.map((l, i) => (
-          <LineRow key={l.key} line={l} products={products} locations={locations} showLocation showPrice={false} onChange={(x) => update(i, x)} onRemove={lines.length > 1 ? () => remove(i) : undefined} />
+          <LineRow key={l.key} line={l} products={products} locations={locations} showLocation onChange={(x) => update(i, x)} onRemove={lines.length > 1 ? () => remove(i) : undefined} />
         ))}
         <Button variant="ghost" onClick={add}>
           <Plus className="h-4 w-4" /> {t("docs.addLine")}
@@ -304,7 +280,7 @@ export function TransferForm({ onDone, onCancel }: { onDone: (d: StockDocument) 
   const tz = useTimeZone();
 
   function send(override = false) {
-    const err = !from || !to ? t("docs.errors.fromTo") : validate(lines, false, false, t);
+    const err = !from || !to ? t("docs.errors.fromTo") : validate(lines, false, t);
     setLocalErr(err);
     if (err) return;
     m.mutate({
@@ -328,7 +304,7 @@ export function TransferForm({ onDone, onCancel }: { onDone: (d: StockDocument) 
       <div className="space-y-2">
         <h3 className="text-sm font-semibold">{t("docs.lines")}</h3>
         {lines.map((l, i) => (
-          <LineRow key={l.key} line={l} products={products} locations={locations} showLocation={false} showPrice={false} onChange={(x) => update(i, x)} onRemove={lines.length > 1 ? () => remove(i) : undefined} />
+          <LineRow key={l.key} line={l} products={products} locations={locations} showLocation={false} onChange={(x) => update(i, x)} onRemove={lines.length > 1 ? () => remove(i) : undefined} />
         ))}
         <Button variant="ghost" onClick={add}>
           <Plus className="h-4 w-4" /> {t("docs.addLine")}

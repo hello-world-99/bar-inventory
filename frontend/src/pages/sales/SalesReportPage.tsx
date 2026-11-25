@@ -10,7 +10,7 @@ import { LocationSelect, useActiveLocations } from "@/components/pickers";
 import { Alert, Badge, Button, Card, cn, Field, Input } from "@/components/ui";
 import { api, ApiError } from "@/lib/api";
 import { errorMessage } from "@/lib/errors";
-import { useCurrency, useDateTime, useMoney, useQty, type Currency } from "@/lib/format";
+import { useCurrency, useDateTime, useQty, type Currency } from "@/lib/format";
 import type { PosLine, SalesImport, SalesImportStatus, SalesWarning, UsageItem } from "@/lib/types";
 import { baseUnitInfo, plain } from "@/lib/units";
 import { uuidv4 } from "@/lib/uuid";
@@ -70,7 +70,6 @@ function UsageRow({ item, draft, editable, priceEditable, edit, onEdit }: {
   const { t } = useTranslation();
   const qty = useQty();
   const cur = useCurrency();
-  const money = useMoney();
   const dt = useDateTime();
   const covered = item.covered_inventory_id !== null;
   // a counted product of a written-off report can be corrected too (reply 48): the count stays true
@@ -135,9 +134,9 @@ function UsageRow({ item, draft, editable, priceEditable, edit, onEdit }: {
           )}
         </td>
       )}
-      <td className="py-2 text-right whitespace-nowrap text-zinc-600">
-        {priceEditable && fixable ? (
-          <div className="inline-flex flex-col items-end gap-1">
+      {priceEditable && (
+        <td className="py-2 text-right whitespace-nowrap text-zinc-600">
+          {fixable && (
             <label className="inline-flex items-center gap-1">
               <Input
                 inputMode="decimal"
@@ -148,14 +147,9 @@ function UsageRow({ item, draft, editable, priceEditable, edit, onEdit }: {
               />
               <span className="text-xs text-zinc-500">/ {t(`units.short.${item.unit}`)}</span>
             </label>
-            <span className="font-medium text-zinc-800">= {cur.format(v.amount)}</span>
-          </div>
-        ) : draft || editable ? (
-          cur.format(v.amount)
-        ) : (
-          money(item.amount)
-        )}
-      </td>
+          )}
+        </td>
+      )}
     </tr>
   );
 }
@@ -461,7 +455,6 @@ export function SalesReportPage() {
   const draft = r.status === "draft";
   const editable = (draft && can("post_write_off")) || (editMode && r.status === "posted");
   // recalculated at once from what is typed (owner, 2026-11-25)
-  const total = r.items.reduce((s, i) => s.plus(draft || editable ? rowValues(i, edits[i.product_id], cur).amount : cur.toDisplay(i.amount)), new Big(0));
   const allValid = r.items.every((i) => rowValues(i, edits[i.product_id], cur).valid);
   const lines = r.items
     .filter((i) => edits[i.product_id] && (i.covered_inventory_id === null || !draft))
@@ -558,7 +551,7 @@ export function SalesReportPage() {
                   <th className="py-1 pr-3">{t("sales.product")}</th>
                   <th className="py-1 pr-3 text-right">{t("sales.used")}</th>
                   {r.items[0]?.balance_base !== null && <th className="py-1 pr-3 text-right">{t("sales.onHand")}</th>}
-                  <th className="py-1 text-right">{t("sales.cost")}</th>
+                  {editable && can("manage_catalog") && <th className="py-1 text-right">{t("sales.price")}</th>}
                 </tr>
               </thead>
               <tbody>
@@ -574,14 +567,6 @@ export function SalesReportPage() {
                   />
                 ))}
               </tbody>
-              <tfoot>
-                <tr className="border-t border-zinc-200 font-semibold">
-                  <td className="py-2" colSpan={r.items[0]?.balance_base !== null ? 3 : 2}>
-                    {t("sales.total")}
-                  </td>
-                  <td className="py-2 text-right">{cur.format(total)}</td>
-                </tr>
-              </tfoot>
             </table>
           </div>
         )}

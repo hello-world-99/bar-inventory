@@ -1,164 +1,168 @@
-# Техническое задание (исходный текст владельца, без правок)
+# Requirements specification
 
-## 1. Общая информация
+> English translation of the owner's original specification, [`requirements.ru.md`](requirements.ru.md) (kept unchanged). If the two ever differ, the original wins. Later decisions of the owner are recorded in [`architecture.md`](architecture.md).
 
-**Назначение:** разработка веб-приложения для автоматизации складского учёта и инвентаризации небольшого бара.
+## 1. General
 
-**Цель:** заменить ручной учёт в Excel, обеспечить контроль товарных остатков, поступлений, списаний и расхождений при инвентаризации.
+**Purpose:** a web application that automates stock control and inventory counts for a small bar.
 
-**Формат:** веб-приложение с доступом через браузер на компьютерах, планшетах и смартфонах.
+**Goal:** replace manual bookkeeping in Excel; keep track of stock levels, receipts, write-offs and the discrepancies found by inventory counts.
 
-**Масштаб:** одно заведение с несколькими местами хранения товаров.
+**Form:** a web application used in a browser on computers, tablets and smartphones.
 
-## 2. Функциональные требования
+**Scale:** one venue with several storage locations.
 
-### 2.1. Главная панель (Dashboard)
+## 2. Functional requirements
 
-- Количество товарных позиций.
-- Общая стоимость товарных запасов.
-- Текущие остатки.
-- Товары с низким остатком.
-- Последние поступления и списания.
-- Результаты последних инвентаризаций.
+### 2.1. Dashboard
 
-### 2.2. Каталог товаров
+- Number of products.
+- Total value of the stock.
+- Current stock levels.
+- Products with low stock.
+- Latest receipts and write-offs.
+- Results of the latest inventory counts.
 
-Для каждой товарной позиции должны храниться:
+### 2.2. Product catalog
 
-- Название.
-- Артикул (SKU).
-- Категория.
-- Единица измерения.
-- Закупочная цена.
-- Минимальный остаток.
-- Штрихкод (опционально).
+For every product the following is stored:
 
-Категории товаров:
+- Name.
+- Article number (SKU).
+- Category.
+- Unit of measure.
+- Purchase price.
+- Minimum stock.
+- Barcode (optional).
 
-- Алкоголь.
-- Безалкогольные напитки.
-- Продукты и ингредиенты.
-- Расходные материалы.
-- Прочее.
+Product categories:
 
-Поддерживаемые единицы измерения: штуки, бутылки, литры, миллилитры, килограммы и граммы.
+- Alcohol.
+- Soft drinks.
+- Food and ingredients.
+- Supplies.
+- Other.
 
-Предусмотреть создание, редактирование, поиск и деактивацию товаров.
+Supported units: pieces, bottles, liters, milliliters, kilograms and grams.
 
-### 2.3. Склады и места хранения
+Products can be created, edited, searched and deactivated.
 
-- Создание и редактирование мест хранения.
-- Учёт остатков отдельно по каждому месту хранения.
-- Просмотр общего количества товара по всем местам хранения.
-- Перемещение товаров между местами хранения с сохранением истории операций.
+### 2.3. Warehouses and storage locations
 
-Примеры: основной склад, барная стойка, холодильник.
+- Create and edit storage locations.
+- Stock is kept separately for each location.
+- The total quantity of a product over all locations can be viewed.
+- Products can be transferred between locations, with the history of operations kept.
 
-### 2.4. Поступление товаров
+Examples: main storeroom, bar counter, fridge.
 
-- Регистрация поступления товаров.
-- Добавление нескольких позиций в один документ.
-- Указание количества и закупочной цены.
-- Дата поступления.
-- Автоматическое увеличение складских остатков.
-- История поступлений.
+### 2.4. Receipts
 
-### 2.5. Инвентаризация
+- Register incoming goods.
+- Several products in one document.
+- Quantity and purchase price.
+- Date of receipt.
+- Stock increases automatically.
+- History of receipts.
 
-Основной функциональный модуль приложения.
+### 2.5. Inventory counts
 
-- Создание инвентаризации по выбранному месту хранения.
-- Автоматическое отображение расчётных остатков.
-- Ввод фактического количества товаров.
-- Автоматический расчёт расхождений.
-- Расчёт стоимости выявленных расхождений.
-- Сохранение результатов.
-- Подтверждение и завершение инвентаризации.
-- Просмотр истории предыдущих инвентаризаций.
+The core module of the application.
 
-После подтверждения инвентаризации фактические остатки должны становиться новыми учётными остатками.
+- Start a count for a chosen storage location.
+- The expected (book) quantities are shown automatically.
+- Enter the actual counted quantities.
+- Discrepancies are calculated automatically.
+- The value of the discrepancies is calculated.
+- Results are saved.
+- The count is confirmed and completed.
+- History of previous counts.
 
-### 2.6. Списание товаров
+Once a count is confirmed, the counted quantities become the new book stock.
 
-- Выбор товара и места хранения.
-- Указание количества.
-- Выбор причины списания.
-- Комментарий.
-- Дата операции.
-- Автоматическое уменьшение остатков.
+### 2.6. Write-offs
 
-Причины списания: порча, истечение срока годности, бой, использование персоналом, прочее.
+- Choose the product and the storage location.
+- Quantity.
+- Reason.
+- Comment.
+- Date of the operation.
+- Stock decreases automatically.
 
-### 2.7. Журнал операций
+Reasons: spoilage, expiry, breakage, staff use, other.
 
-Единая история движения товаров:
+### 2.7. Movement journal
 
-- Поступления.
-- Списания.
-- Перемещения.
-- Корректировки по результатам инвентаризации.
+One history of all stock movements:
 
-Фильтрация по датам, товарам, местам хранения и типам операций.
+- Receipts.
+- Write-offs.
+- Transfers.
+- Adjustments from inventory counts.
 
-## 3. Особенности учёта алкоголя
+Filters by date, product, storage location and operation type.
 
-Система должна поддерживать учёт частично использованных бутылок.
+## 3. Alcohol specifics
 
-Пример: бутылка объёмом 700 мл, фактический остаток — 350 мл.
+The system must handle partly used bottles.
 
-Необходимо обеспечить пересчёт между единицами измерения, например бутылками и миллилитрами.
+Example: a 700 ml bottle with 350 ml actually left.
 
-## 4. Пользователи и права доступа
+Conversion between units must be provided, e.g. between bottles and milliliters.
 
-Предусмотреть авторизацию и две роли:
+## 4. Users and permissions
 
-| Роль | Права |
+Sign-in and two roles:
+
+| Role | Permissions |
 |---|---|
-| Администратор | Полный доступ ко всем функциям |
-| Сотрудник | Просмотр остатков, ввод фактических данных, выполнение разрешённых операций |
+| Administrator | Full access to every function |
+| Staff | View stock, enter counted quantities, perform the permitted operations |
 
-## 5. Нефункциональные требования
+## 5. Non-functional requirements
 
-- Корректное хранение и обработка данных.
-- Защита от несанкционированного доступа.
-- Сохранение истории складских операций.
-- Исключение некорректного изменения остатков при одновременных операциях.
-- Резервное копирование базы данных.
-- Адаптивный интерфейс.
-- Возможность дальнейшего расширения системы.
+- Data stored and processed correctly.
+- Protection against unauthorized access.
+- The history of stock operations is kept.
+- Concurrent operations cannot corrupt the stock levels.
+- Database backups.
+- Responsive interface.
+- The system can be extended later.
 
-## 6. Требования к интерфейсу
+## 6. Interface requirements
 
-- Современный минималистичный дизайн.
-- Боковая панель навигации.
-- Таблицы с поиском, сортировкой и фильтрацией.
-- Удобные формы добавления и редактирования данных.
-- Понятное отображение остатков и расхождений.
-- Основной язык интерфейса — английский.
-- Возможность последующей локализации на русский и корейский языки.
+- Modern, minimalist design.
+- Navigation sidebar.
+- Tables with search, sorting and filters.
+- Convenient forms for adding and editing data.
+- Clear display of stock levels and discrepancies.
+- The main interface language is English.
+- Localization into Russian and Korean must be possible later.
 
-## 7. Технологические ограничения
+## 7. Technology constraints
 
-Конкретный технологический стек определяется на этапе проектирования.
+The technology stack is chosen at the design stage.
 
-Основные требования:
+Main requirements:
 
-- Разделение клиентской и серверной частей.
-- Использование реляционной базы данных.
-- Возможность независимого развития frontend и backend.
-- Возможность дальнейшей интеграции с POS-системами.
-- Возможность разработки отдельного мобильного приложения с использованием существующего backend API.
+- Separate client and server parts.
+- A relational database.
+- Frontend and backend can evolve independently.
+- Integration with POS systems must be possible later.
+- A separate mobile application must be possible on top of the existing backend API.
 
-## 8. Ограничения первой версии (MVP)
+## 8. Out of scope for the first version (MVP)
 
-В первую версию не входят:
+The first version does not include:
 
-- Интеграция с POS-системами.
-- Автоматическое списание ингредиентов по продажам.
-- Технологические карты и рецептуры коктейлей.
-- Мобильное приложение.
-- Автоматизация заказов поставщикам.
-- Многозаведенческий учёт.
-- Сложная финансовая аналитика.
+- Integration with POS systems.
+- Automatic write-off of ingredients by sales.
+- Recipe cards and cocktail recipes.
+- A mobile application.
+- Automated ordering from suppliers.
+- Several venues.
+- Complex financial analytics.
 
-**Результат разработки:** готовое к эксплуатации веб-приложение для ведения товарного учёта и проведения инвентаризации небольшого бара с возможностью дальнейшего расширения функциональности.
+**Deliverable:** a production-ready web application for stock control and inventory counts in a small bar, which can be extended later.
+
+> Note: after the MVP the owner asked for a POS sales import with kitchen norms (items 1 and 2 of section 8, in a file-based form). See [`architecture.md`](architecture.md), section 11.
