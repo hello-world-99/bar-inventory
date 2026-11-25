@@ -12,6 +12,9 @@ import { JournalPage } from "./pages/JournalPage";
 import { LocationsPage } from "./pages/LocationsPage";
 import { LoginPage } from "./pages/LoginPage";
 import { ProductsPage } from "./pages/ProductsPage";
+import { PosItemsPage } from "./pages/sales/PosItemsPage";
+import { SalesPage } from "./pages/sales/SalesPage";
+import { SalesReportPage } from "./pages/sales/SalesReportPage";
 import { SettingsPage } from "./pages/SettingsPage";
 import { StockPage } from "./pages/StockPage";
 import { UsersPage } from "./pages/UsersPage";
@@ -48,6 +51,9 @@ export function App() {
         <Route path="transfers" element={<DocumentsPage key="transfer" type="transfer" />} />
         <Route path="inventory" element={<InventoryListPage />} />
         <Route path="inventory/:id" element={<InventoryCountPage />} />
+        <Route path="sales" element={<SalesPage />} />
+        <Route path="sales/:id" element={<SalesReportPage />} />
+        <Route path="pos-items" element={<PosItemsPage />} />
         <Route path="journal" element={<JournalPage />} />
         <Route path="products" element={<ProductsPage />} />
         <Route path="locations" element={<LocationsPage />} />

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { enqueue, loadQueue, settle, toRequest, type KV, type PendingCount } from "./countQueue";
+import { enqueue, isDefinite, loadQueue, settle, toRequest, type KV, type PendingCount } from "./countQueue";
 
 function memory(): KV {
   const m = new Map<string, string>();
@@ -62,6 +62,11 @@ describe("pending count queue", () => {
     expect(r.counted_at).toBe("2026-11-25T21:00:00.000Z");
     expect(r.sent_at).toBe("2026-11-25T21:20:00.000Z");
     expect(r.version).toBe(2);
+  });
+
+  it("keeps entries on a lost session, network error, overload or server error", () => {
+    expect([0, 401, 429, 500, 502, 503].map(isDefinite)).toEqual([false, false, false, false, false, false]);
+    expect([400, 403, 404, 409, 422].map(isDefinite)).toEqual([true, true, true, true, true]);
   });
 
   it("tolerates missing or corrupt storage", () => {

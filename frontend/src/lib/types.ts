@@ -27,11 +27,19 @@ export interface User {
 
 export interface AppSettings {
   venue_name: string;
-  currency: string;
+  /** display currency; all money is stored in won */
+  currency: "KRW" | "USD";
   currency_decimals: number;
   timezone: string;
   business_day_starts_at: string;
   blind_count: boolean;
+  usd_krw_rate: string | null;
+  rate_mode: "auto" | "manual";
+  rate_source: string | null;
+  rate_date: string | null;
+  rate_updated_at: string | null;
+  rate_checked_at: string | null;
+  rate_error: string | null;
 }
 
 export interface TokenOut {
@@ -89,7 +97,8 @@ export interface Page<T> {
 }
 
 export type DocType = "receipt" | "write_off" | "transfer" | "inventory_adjustment" | "reversal";
-export type WriteOffReason = "spoilage" | "expired" | "breakage" | "staff_use" | "other";
+export type WriteOffReason = "spoilage" | "expired" | "breakage" | "staff_use" | "other" | "sales";
+// "sales" is set only by POS sales imports, never offered in the write-off form.
 export const WRITE_OFF_REASONS: WriteOffReason[] = ["spoilage", "expired", "breakage", "staff_use", "other"];
 
 export interface DocLine {
@@ -184,6 +193,9 @@ export interface StockRow {
   location_name: string;
   qty_base: string;
   value: string;
+  min_stock_base: string;
+  /** the product's total is at or below its minimum: shown red */
+  is_low_stock: boolean;
 }
 
 export type InventoryStatus = "in_progress" | "completed" | "cancelled";
@@ -242,6 +254,7 @@ export interface LocationValue {
   name: string;
   value: string;
   product_count: number;
+  is_active: boolean;
 }
 
 export interface Dashboard {
@@ -256,4 +269,100 @@ export interface Dashboard {
   recent_receipts: DocSummary[];
   recent_write_offs: DocSummary[];
   recent_inventories: Inventory[];
+}
+
+// ------------------------------------------------------------ POS sales imports
+export type SalesImportStatus = "draft" | "posted" | "covered" | "voided";
+
+export interface SalesImportSummary {
+  id: string;
+  sales_date: string; // YYYY-MM-DD, business day
+  status: SalesImportStatus;
+  file_name: string;
+  total_qty: string;
+  total_revenue: string | null;
+  location_id: number | null;
+  location_name: string | null;
+  write_off_id: string | null;
+  uploaded_by_name: string;
+  uploaded_at: string;
+  closed_by_name: string | null;
+  closed_at: string | null;
+  warning_count: number;
+}
+
+export interface UsagePart {
+  pos_code: string;
+  pos_name: string;
+  sold_qty: string;
+  per_unit_base: string;
+  qty_base: string;
+}
+
+export interface UsageItem extends UnitInfo {
+  product_id: number;
+  product_name: string;
+  product_sku: string;
+  is_active: boolean;
+  qty_base: string;
+  unit_cost_base: string;
+  amount: string;
+  balance_base: string | null;
+  min_stock_base: string;
+  /** not written off: this completed inventory counted it after the sales (drafts: will be skipped) */
+  covered_inventory_id: number | null;
+  covered_at: string | null;
+  parts: UsagePart[];
+}
+
+export interface PosLine {
+  pos_item_id: number | null;
+  code: string;
+  name: string;
+  qty: string;
+  revenue: string | null;
+}
+
+export interface SalesWarning {
+  code: "negative_qty" | "total_mismatch" | "file_date_far" | string;
+  [k: string]: string;
+}
+
+export interface SalesImport extends SalesImportSummary {
+  file_sha256: string;
+  covered_inventory_id: number | null;
+  warnings: SalesWarning[];
+  items: UsageItem[];
+  unmapped: PosLine[];
+  not_kitchen: PosLine[];
+  line_count: number;
+}
+
+export interface SalesImportList {
+  default_sales_date: string;
+  items: SalesImportSummary[];
+}
+
+export interface PosComponent extends UnitInfo {
+  product_id: number;
+  product_name: string;
+  product_sku: string;
+  is_active: boolean;
+  qty_base: string;
+}
+
+export interface PosItem {
+  id: number;
+  code: string;
+  name: string;
+  not_kitchen: boolean;
+  components: PosComponent[];
+  updated_at: string;
+}
+
+export interface PendingDays {
+  location_id: number;
+  last_imported: string | null;
+  days: string[];
+  more: number;
 }

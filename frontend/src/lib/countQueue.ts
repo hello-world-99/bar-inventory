@@ -78,6 +78,16 @@ export function settle(sent: PendingCount, newVersion: number | null, kv: KV | n
   save(q, kv);
 }
 
+/**
+ * Whether an answer to an upload is final for that entry. Network errors (status 0), 5xx, 429 and 401 are
+ * not: 401 means the session ended (expired refresh token, password or role changed), and the entry
+ * belongs to its user, so it is sent once that person signs in again. Other 4xx (403 no longer allowed,
+ * 409 version conflict / count closed, 422 invalid) will not change on retry.
+ */
+export function isDefinite(status: number): boolean {
+  return status >= 400 && status < 500 && status !== 401 && status !== 429;
+}
+
 /** Body for PUT /inventories/{id}/lines/{product}; sent_at is taken at the moment of sending. */
 export function toRequest(item: PendingCount, sentAt: Date = new Date()) {
   return { parts: item.parts, counted_at: item.countedAt, sent_at: sentAt.toISOString(), version: item.version };

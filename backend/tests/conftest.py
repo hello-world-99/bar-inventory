@@ -2,6 +2,7 @@ import os
 
 os.environ.setdefault("JWT_SECRET", "test-secret-test-secret-test-secret-0123")
 os.environ.setdefault("COOKIE_SECURE", "false")
+os.environ["RATE_AUTO_UPDATE"] = "false"  # no network in tests; fx.fetch is replaced where a test needs it
 
 from collections.abc import Iterator  # noqa: E402
 

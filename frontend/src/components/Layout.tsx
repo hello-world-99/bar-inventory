@@ -1,6 +1,8 @@
 import {
   ArrowLeftRight,
   BookOpen,
+  ChefHat,
+  KeyRound,
   ClipboardCheck,
   LayoutDashboard,
   LogOut,
@@ -8,6 +10,7 @@ import {
   Package,
   PackageMinus,
   PackagePlus,
+  Receipt,
   Settings,
   Users,
   Warehouse,
@@ -20,7 +23,9 @@ import { useTranslation } from "react-i18next";
 import { NavLink, Outlet, useLocation } from "react-router-dom";
 import { useAuth } from "@/auth/AuthContext";
 import { loadQueue } from "@/lib/countQueue";
+import { useAppSettings } from "@/lib/format";
 import type { Permission } from "@/lib/types";
+import { ChangePasswordDialog } from "./ChangePassword";
 import { Modal } from "./Modal";
 import { Button, cn } from "./ui";
 
@@ -46,6 +51,7 @@ const sections: { key: string; items: NavItem[] }[] = [
       { to: "/write-offs", key: "writeOffs", icon: PackageMinus },
       { to: "/transfers", key: "transfers", icon: ArrowLeftRight },
       { to: "/inventory", key: "inventory", icon: ClipboardCheck },
+      { to: "/sales", key: "sales", icon: Receipt },
       { to: "/journal", key: "journal", icon: BookOpen },
     ],
   },
@@ -54,6 +60,7 @@ const sections: { key: string; items: NavItem[] }[] = [
     items: [
       { to: "/products", key: "products", icon: Package },
       { to: "/locations", key: "locations", icon: Warehouse },
+      { to: "/pos-items", key: "posItems", icon: ChefHat },
     ],
   },
   {
@@ -69,6 +76,7 @@ function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
   const { t } = useTranslation();
   const { user, can, logout } = useAuth();
   const [unsent, setUnsent] = useState(0);
+  const [changing, setChanging] = useState(false);
   const signOut = () => {
     const n = user ? loadQueue(user.id).length : 0;
     if (n > 0) setUnsent(n);
@@ -106,11 +114,20 @@ function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
           );
         })}
       </nav>
+      <RateNote />
       <div className="border-t border-zinc-200 p-3">
         <div className="px-2 pb-2">
           <div className="truncate text-sm font-medium">{user?.full_name || user?.username}</div>
           <div className="text-xs text-zinc-500">{user && t(`role.${user.role}`)}</div>
         </div>
+        <button
+          type="button"
+          onClick={() => setChanging(true)}
+          className="flex min-h-10 w-full items-center gap-3 rounded-lg px-2 text-sm text-zinc-700 hover:bg-zinc-100"
+        >
+          <KeyRound className="h-4 w-4" aria-hidden />
+          {t("auth.changePassword")}
+        </button>
         <button
           type="button"
           onClick={signOut}
@@ -120,6 +137,7 @@ function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
           {t("auth.signOut")}
         </button>
       </div>
+      {changing && <ChangePasswordDialog onClose={() => setChanging(false)} />}
       {unsent > 0 && (
         <Modal title={t("auth.unsentTitle")} onClose={() => setUnsent(0)}>
           <p className="text-sm">{t("auth.unsentExplain", { count: unsent })}</p>
@@ -134,6 +152,19 @@ function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
         </Modal>
       )}
     </div>
+  );
+}
+
+/** Dollars are won at the current rate (reply 34, p. 5): say which rate, and whether it is stale. */
+function RateNote() {
+  const { t } = useTranslation();
+  const s = useAppSettings().data;
+  if (!s || s.currency !== "USD" || !s.usd_krw_rate) return null;
+  return (
+    <p className={cn("px-5 pb-3 text-xs", s.rate_error ? "text-amber-700" : "text-zinc-500")}>
+      {t("settings.rateNote", { rate: Number(s.usd_krw_rate).toFixed(2), date: s.rate_date ?? s.rate_updated_at?.slice(0, 10) ?? "" })}
+      {s.rate_error ? ` — ${t("settings.updateFailed")}` : ""}
+    </p>
   );
 }
 

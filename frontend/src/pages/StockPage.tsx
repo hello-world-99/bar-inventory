@@ -49,8 +49,9 @@ export function StockPage() {
         cell: ({ row: { original: r } }) => {
           const f = qty(r.qty_base, r);
           return (
-            <span className={new Big(r.qty_base).lt(0) ? "text-red-600" : ""}>
+            <span className={new Big(r.qty_base).lt(0) || r.is_low_stock ? "font-semibold text-red-700" : ""}>
               {f.main}
+              {r.is_low_stock && <span className="block text-xs font-normal">{t("products.low")}</span>}
               {f.alt && <span className="block text-xs text-zinc-500">{f.alt}</span>}
             </span>
           );
@@ -89,6 +90,7 @@ export function StockPage() {
       <DataTable
         data={rows.data}
         columns={columns}
+        rowClassName={(r) => (r.is_low_stock ? "bg-red-50" : undefined)}
         loading={rows.isLoading}
         search={search}
         searchText={(r) => `${r.product_name} ${r.product_sku} ${r.location_name}`}

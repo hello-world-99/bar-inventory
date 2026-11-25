@@ -1,0 +1,9 @@
+# TLS in front of the app (docker-compose.prod.yml). Caddy gets and renews a Let's Encrypt
+# certificate for DOMAIN and redirects http:// to https:// on its own.
+{$DOMAIN} {
+	encode gzip
+	header Strict-Transport-Security "max-age=31536000"
+	# Caddy does not trust X-Forwarded-For from clients (no trusted_proxies), so the header it sends
+	# to `web` holds exactly the client's address; web's nginx trusts it only from this container.
+	reverse_proxy web:80
+}

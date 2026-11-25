@@ -1,4 +1,6 @@
-from datetime import time
+from datetime import datetime, time
+from decimal import Decimal
+from typing import Literal
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
@@ -51,18 +53,25 @@ class PasswordChange(BaseModel):
 
 class SettingsOut(ORM):
     venue_name: str
-    currency: str
+    currency: Literal["KRW", "USD"]  # display currency; money is stored in won
     currency_decimals: int
     timezone: str
     business_day_starts_at: time
     blind_count: bool
+    usd_krw_rate: Decimal | None
+    rate_mode: Literal["auto", "manual"]
+    rate_source: str | None
+    rate_date: str | None
+    rate_updated_at: datetime | None
+    rate_checked_at: datetime | None
+    rate_error: str | None
 
 
 class SettingsUpdate(BaseModel):
     venue_name: str | None = Field(default=None, min_length=1, max_length=128)
-    currency: str | None = Field(default=None, pattern=r"^[A-Z]{3}$")
-    # Prices are NUMERIC(14,2), so more than 2 display decimals would be meaningless.
-    currency_decimals: int | None = Field(default=None, ge=0, le=2)
+    currency: Literal["KRW", "USD"] | None = None  # decimals follow: KRW 0, USD 2
+    rate_mode: Literal["auto", "manual"] | None = None
+    usd_krw_rate: Decimal | None = Field(default=None, ge=100, le=100000, max_digits=12, decimal_places=4)  # manual mode
     timezone: str | None = None
     business_day_starts_at: time | None = None
     blind_count: bool | None = None

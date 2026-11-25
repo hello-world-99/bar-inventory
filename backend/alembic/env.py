@@ -20,7 +20,7 @@ def _url() -> str:
 
 
 def run_migrations_offline() -> None:
-    context.configure(url=_url(), target_metadata=target_metadata, literal_binds=True)
+    context.configure(url=_url(), target_metadata=target_metadata, literal_binds=True, transaction_per_migration=True)
     with context.begin_transaction():
         context.run_migrations()
 
@@ -28,7 +28,8 @@ def run_migrations_offline() -> None:
 def run_migrations_online() -> None:
     engine = create_engine(_url())
     with engine.connect() as connection:
-        context.configure(connection=connection, target_metadata=target_metadata)
+        # One transaction per migration: a value added by ALTER TYPE ... ADD VALUE is usable in the next one.
+        context.configure(connection=connection, target_metadata=target_metadata, transaction_per_migration=True)
         with context.begin_transaction():
             context.run_migrations()
     engine.dispose()

@@ -213,12 +213,15 @@ def list_inventories(
     location_id: int | None = None,
     status: InventoryStatus | None = None,
     limit: Annotated[int, Query(ge=1, le=200)] = 50,
+    exclude_cancelled: bool = False,
 ) -> list[InventoryOut]:
     stmt = select(Inventory)
     if location_id is not None:
         stmt = stmt.where(Inventory.location_id == location_id)
     if status is not None:
         stmt = stmt.where(Inventory.status == status)
+    if exclude_cancelled:
+        stmt = stmt.where(Inventory.status != InventoryStatus.cancelled)
     stmt = stmt.order_by(case((Inventory.status == InventoryStatus.in_progress, 0), else_=1), Inventory.started_at.desc()).limit(limit)
     return [InventoryOut(**_detail(db, user, inv, with_lines=False).model_dump(exclude={"lines"})) for inv in db.scalars(stmt)]
 

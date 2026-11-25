@@ -12,6 +12,7 @@ from app.api.deps import CurrentUser, DbSession, require
 from app.api.errors import integrity_to_http
 from app.core.permissions import Perm
 from app.core.units import BASE_OF, UnitError, resolve_unit_size
+from app.services.posting import to_won, usd_rate
 from app.models import (
     Category,
     Inventory,
@@ -283,6 +284,7 @@ def create_product(body: ProductCreate, user: Manager, db: DbSession) -> Product
         size = resolve_unit_size(body.unit, body.unit_size)
     except UnitError as e:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(e)) from None
+    price = to_won(body.purchase_price, usd_rate(db) if body.price_currency == "USD" else None)
     p = Product(
         name=body.name,
         sku=body.sku,
@@ -290,8 +292,8 @@ def create_product(body: ProductCreate, user: Manager, db: DbSession) -> Product
         unit=body.unit,
         base_unit=BASE_OF[body.unit],
         unit_size=size,
-        purchase_price=body.purchase_price,
-        price_updated_at=func.now() if body.purchase_price else None,
+        purchase_price=price,
+        price_updated_at=func.now() if price else None,
         min_stock_base=body.min_stock_base,
         barcode=body.barcode,
         full_weight_g=body.full_weight_g,
@@ -340,8 +342,11 @@ def update_product(product_id: int, body: ProductUpdate, user: Manager, db: DbSe
         if body.category_id != p.category_id:
             _check_category(db, body.category_id)
         p.category_id = body.category_id
-    if "purchase_price" in sent and body.purchase_price is not None and body.purchase_price != p.purchase_price:
-        p.purchase_price = body.purchase_price
+    price = None
+    if "purchase_price" in sent and body.purchase_price is not None:
+        price = to_won(body.purchase_price, usd_rate(db) if body.price_currency == "USD" else None)
+    if price is not None and price != p.purchase_price:
+        p.purchase_price = price
         p.price_updated_at = func.now()  # a manual price wins over receipts dated earlier
     for field in ("barcode", "full_weight_g", "empty_weight_g"):  # nullable: explicit null clears
         if field in sent:

@@ -2,6 +2,7 @@
 
     python -m app.cli create-admin <username>   # prompts for the password
     python -m app.cli bootstrap                 # creates the first admin from env when no users exist
+    python -m app.cli seed-example              # example data: one POS day from the owner's Excel, written off
 """
 
 import getpass
@@ -57,6 +58,11 @@ def main(argv: list[str]) -> None:
         create_admin(argv[1], pw)
     elif argv[:1] == ["bootstrap"]:
         bootstrap()
+    elif argv[:1] == ["seed-example"]:
+        from app.services.example import seed_example
+
+        with get_sessionmaker()() as db:
+            print(seed_example(db))
     else:
         sys.exit(__doc__)
 

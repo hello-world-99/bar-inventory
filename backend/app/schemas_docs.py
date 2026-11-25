@@ -1,7 +1,7 @@
 import uuid
 from datetime import date, datetime
 from decimal import Decimal
-from typing import Annotated
+from typing import Annotated, Literal
 
 from pydantic import AfterValidator, BaseModel, ConfigDict, Field, StringConstraints
 
@@ -45,6 +45,8 @@ class DocCommon(BaseModel):
 
 
 class ReceiptIn(DocCommon):
+    # Currency of unit_price: USD is converted to won at settings.usd_krw_rate and rounded to whole won (reply 34).
+    price_currency: Literal["KRW", "USD"] = "KRW"
     supplier: Annotated[str, StringConstraints(strip_whitespace=True, max_length=128)] | None = None
     invoice_no: Annotated[str, StringConstraints(strip_whitespace=True, max_length=64)] | None = None
     lines: list[ReceiptLineIn] = Field(min_length=1, max_length=500)
@@ -98,6 +100,7 @@ class DocLineOut(BaseModel):
 
 
 class DocOut(BaseModel):
+    price_rate: Decimal | None = None  # receipts priced in dollars: won per dollar used
     id: uuid.UUID
     type: DocType
     status: DocStatus
@@ -181,6 +184,8 @@ class StockRow(BaseModel):
     location_name: str
     qty_base: Decimal
     value: Decimal  # current-price valuation, unrounded
+    min_stock_base: Decimal = Decimal(0)
+    is_low_stock: bool = False  # the product's total over all locations is at or below its minimum
 
 
 class ReconcileRow(BaseModel):

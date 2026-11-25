@@ -1,0 +1,38 @@
+# Production on a VPS: HTTPS via Caddy. Use together with the base file:
+#   docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build
+# Only Caddy publishes ports (80, 443); web, backend and db are reachable only inside Docker.
+services:
+  web:
+    ports: !reset []
+    networks:
+      default:
+      edge:
+
+  caddy:
+    image: caddy:2.8-alpine
+    restart: unless-stopped
+    environment:
+      DOMAIN: ${DOMAIN:?set DOMAIN in .env}
+    ports:
+      - "${HTTP_PORT:-80}:80"
+      - "${HTTPS_PORT:-443}:443"
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    networks:
+      edge:
+        # fixed: web's nginx (frontend/nginx.conf, set_real_ip_from) trusts X-Forwarded-For only from here
+        ipv4_address: 172.31.250.10
+    depends_on:
+      - web
+
+networks:
+  edge:
+    ipam:
+      config:
+        - subnet: 172.31.250.0/24
+
+volumes:
+  caddy_data:
+  caddy_config:

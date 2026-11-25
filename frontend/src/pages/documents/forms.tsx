@@ -7,10 +7,10 @@ import { LocationSelect, ProductPicker, QtyField, useActiveLocations, useActiveP
 import { Alert, Button, Field, Input, Select } from "@/components/ui";
 import { api, ApiError } from "@/lib/api";
 import { errorMessage } from "@/lib/errors";
-import { useAppSettings, useMoney, useQty } from "@/lib/format";
+import { useAppSettings, useCurrency, useQty } from "@/lib/format";
 import { nowLocalIn, zonedLocalToIso } from "@/lib/tz";
 import { WRITE_OFF_REASONS, type Location, type Product, type StockDocument, type WriteOffReason } from "@/lib/types";
-import { toBase, type Unit } from "@/lib/units";
+import { plain, toBase, type Unit } from "@/lib/units";
 import { uuidv4 } from "@/lib/uuid";
 
 interface Line {
@@ -100,7 +100,7 @@ function LineRow({ line, products, locations, showLocation, showPrice, onChange,
   onChange: (l: Line) => void; onRemove?: () => void; stockHint?: ReactNode;
 }) {
   const { t } = useTranslation();
-  const money = useMoney();
+  const cur = useCurrency();
   const p = products.find((x) => x.id === line.product_id) ?? null;
   let base: string | null = null;
   try {
@@ -111,11 +111,12 @@ function LineRow({ line, products, locations, showLocation, showPrice, onChange,
   const fmt = useQty();
   // The price is always per product unit (e.g. per bottle), even when the quantity is entered in l or ml.
   const priceLabel = p ? t("products.pricePer", { unit: t(`units.one.${p.unit}`) }) : t("docs.unitPrice");
+  // line.unit_price is in the display currency (dollars are converted to won on the server, reply 34)
   const amount = p && isNum(line.qty) && isNum(line.unit_price) && base ? new Big(base).div(p.unit_size).times(line.unit_price) : null;
   return (
     <div className="grid gap-3 rounded-lg border border-zinc-200 p-3 sm:grid-cols-12 sm:items-start">
       <div className="sm:col-span-4">
-        <ProductPicker products={products} value={line.product_id} onChange={(np) => onChange({ ...line, product_id: np.id, qty_unit: np.unit, unit_price: line.unit_price || (showPrice ? new Big(np.purchase_price).toString() : "") })} />
+        <ProductPicker products={products} value={line.product_id} onChange={(np) => onChange({ ...line, product_id: np.id, qty_unit: np.unit, unit_price: line.unit_price || (showPrice ? plain(cur.toDisplay(np.purchase_price), cur.decimals) : "") })} />
         {stockHint}
       </div>
       {showLocation && (
@@ -130,7 +131,7 @@ function LineRow({ line, products, locations, showLocation, showPrice, onChange,
       {showPrice && (
         <div className="sm:col-span-2">
           <Input inputMode="decimal" placeholder={priceLabel} aria-label={priceLabel} title={priceLabel} value={line.unit_price} onChange={(e) => onChange({ ...line, unit_price: e.target.value.replace(",", ".") })} required />
-          <p className="mt-1 text-xs text-zinc-500">{p ? `${t("docs.per")} ${t(`units.one.${p.unit}`)}` : ""}{amount ? ` · = ${money(amount.toString())}` : ""}</p>
+          <p className="mt-1 text-xs text-zinc-500">{p ? `${t("docs.per")} ${t(`units.one.${p.unit}`)}` : ""}{amount ? ` · = ${cur.format(amount)}` : ""}</p>
         </div>
       )}
       {onRemove && (
@@ -172,7 +173,7 @@ function useLines(initialLocation: number | null = null) {
 // --------------------------------------------------------------------- receipt
 export function ReceiptForm({ onDone, onCancel }: { onDone: (d: StockDocument) => void; onCancel: () => void }) {
   const { t } = useTranslation();
-  const money = useMoney();
+  const cur = useCurrency();
   const products = useActiveProducts().data ?? [];
   const locations = useActiveLocations().data ?? [];
   const { lines, update, add, remove } = useLines();
@@ -199,6 +200,7 @@ export function ReceiptForm({ onDone, onCancel }: { onDone: (d: StockDocument) =
     if (err) return;
     m.mutate({
       supplier: supplier || null, invoice_no: invoice || null, comment, doc_date: isoOrUndefined(date, tz), confirm_backdate: confirm,
+      price_currency: cur.code,
       lines: lines.map((l) => ({ product_id: l.product_id, location_id: l.location_id, qty: l.qty, qty_unit: l.qty_unit, unit_price: l.unit_price })),
     });
   }
@@ -223,7 +225,7 @@ export function ReceiptForm({ onDone, onCancel }: { onDone: (d: StockDocument) =
           <Button variant="ghost" onClick={add}>
             <Plus className="h-4 w-4" /> {t("docs.addLine")}
           </Button>
-          <span className="text-sm font-semibold tabular-nums">{t("products.total")}: {money(total.toString())}</span>
+          <span className="text-sm font-semibold tabular-nums">{t("products.total")}: {cur.format(total)}</span>
         </div>
       </div>
       <SubmitBar pending={m.isPending} needsNegative={false} needsBackdate={needsBackdate} onCancel={onCancel} onOverride={() => send(true)} />

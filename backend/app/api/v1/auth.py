@@ -97,8 +97,13 @@ def me(user: CurrentUser) -> UserOut:
 
 @router.post("/change-password", response_model=TokenOut)
 def change_password(body: PasswordChange, user: CurrentUser, response: Response, db: DbSession) -> TokenOut:
+    key = f"pw:{user.id}"
+    if login_limiter.is_blocked(key):
+        raise HTTPException(status.HTTP_429_TOO_MANY_REQUESTS, "Too many attempts, try again later")
     if not verify_password(body.current_password, user.password_hash):
+        login_limiter.hit(key)
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Current password is incorrect")
+    login_limiter.reset(key)
     user.password_hash = hash_password(body.new_password)
     user.token_version += 1  # signs out other devices
     db.commit()

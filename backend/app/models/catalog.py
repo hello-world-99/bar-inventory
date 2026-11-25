@@ -13,6 +13,7 @@ class Unit(str, enum.Enum):
 
     pcs = "pcs"
     bottle = "bottle"
+    pack = "pack"  # a pack of a fixed weight, e.g. 200 g of meat (base g, size per product)
     l = "l"  # noqa: E741
     ml = "ml"
     kg = "kg"

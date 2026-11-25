@@ -6,7 +6,7 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel
-from sqlalchemy import and_, func, select
+from sqlalchemy import and_, func, or_, select
 
 from app.api.deps import DbSession, require
 from app.api.v1.documents import list_documents
@@ -34,6 +34,7 @@ class LocationValue(BaseModel):
     name: str
     value: Decimal
     product_count: int
+    is_active: bool  # a deactivated location still holding stock is listed, so the parts add up to stock_value
 
 
 class Dashboard(BaseModel):
@@ -75,13 +76,14 @@ def dashboard(user: Annotated[User, Depends(require(Perm.view))], db: DbSession)
         .order_by((total / Product.min_stock_base).asc(), func.lower(Product.name))
     ).all()
     negative = db.scalar(select(func.count()).select_from(StockBalance).where(StockBalance.qty_base < 0)) or 0
+    nonzero = func.count().filter(StockBalance.qty_base != 0)
     by_loc = db.execute(
-        select(Location.id, Location.name, func.coalesce(func.sum(value), 0), func.count().filter(StockBalance.qty_base != 0))
+        select(Location.id, Location.name, func.coalesce(func.sum(value), 0), nonzero, Location.is_active)
         .join(StockBalance, StockBalance.location_id == Location.id)
         .join(Product, Product.id == StockBalance.product_id)
-        .where(Location.is_active)
-        .group_by(Location.id, Location.name)
-        .order_by(func.lower(Location.name))
+        .group_by(Location.id, Location.name, Location.is_active)
+        .having(or_(Location.is_active, nonzero > 0))
+        .order_by(Location.is_active.desc(), func.lower(Location.name))
     ).all()
 
     return Dashboard(
@@ -91,7 +93,7 @@ def dashboard(user: Annotated[User, Depends(require(Perm.view))], db: DbSession)
         in_stock_count=in_stock,
         low_stock_count=len(low_rows),
         negative_count=negative,
-        by_location=[LocationValue(location_id=i, name=n, value=Decimal(v), product_count=c) for i, n, v, c in by_loc],
+        by_location=[LocationValue(location_id=i, name=n, value=Decimal(v), product_count=c, is_active=a) for i, n, v, c, a in by_loc],
         low_stock=[
             LowStockItem(product_id=p.id, name=p.name, sku=p.sku, unit=p.unit, base_unit=p.base_unit.value, unit_size=p.unit_size,
                          total_qty_base=Decimal(t), min_stock_base=p.min_stock_base)
@@ -99,5 +101,5 @@ def dashboard(user: Annotated[User, Depends(require(Perm.view))], db: DbSession)
         ],
         recent_receipts=list_documents(user, db, type=["receipt"], limit=5).items,
         recent_write_offs=list_documents(user, db, type=["write_off"], limit=5).items,
-        recent_inventories=[i for i in list_inventories(user, db, limit=10) if i.status != "cancelled"][:5],
+        recent_inventories=list_inventories(user, db, limit=5, exclude_cancelled=True),
     )

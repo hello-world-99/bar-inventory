@@ -28,6 +28,7 @@ class WriteOffReason(str, enum.Enum):
     breakage = "breakage"
     staff_use = "staff_use"
     other = "other"
+    sales = "sales"  # POS sales import only (app/services/sales.py)
 
 
 class StockBalance(Base):
@@ -58,6 +59,8 @@ class StockDocument(Base):
     backdate_confirmed: Mapped[bool] = mapped_column(Boolean, default=False)
     # sha256 of the canonical create request (idempotent retries); NULL for system documents.
     request_hash: Mapped[str | None] = mapped_column(String(64))
+    # Receipt prices entered in dollars: the won-per-dollar rate they were converted at (reply 34).
+    price_rate: Mapped[Decimal | None] = mapped_column(Numeric(12, 4))
     created_by: Mapped[int] = mapped_column(ForeignKey("users.id"))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     posted_by: Mapped[int | None] = mapped_column(ForeignKey("users.id"))

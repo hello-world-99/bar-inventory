@@ -18,7 +18,7 @@ import uuid
 from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-from decimal import Decimal
+from decimal import ROUND_HALF_UP, Decimal
 from typing import Any
 
 from fastapi import HTTPException, status
@@ -30,6 +30,7 @@ from sqlalchemy.orm import Session
 from app.core.permissions import Perm, has_perm
 from app.core.units import QTY_QUANT, UnitError, to_base
 from app.models import (
+    AppSettings,
     DocStatus,
     DocType,
     Inventory,
@@ -286,36 +287,60 @@ def _backdate_hook(db: Session, user: User, doc: StockDocument, confirm: bool) -
 
 
 # ------------------------------------------------------------------ documents
+def usd_rate(db: Session) -> Decimal:
+    rate = db.scalar(select(AppSettings.usd_krw_rate).where(AppSettings.id == 1))
+    if not rate:
+        raise error(422, "There is no USD rate yet: update it or type it in in Settings", "rate_required")
+    return Decimal(rate)
+
+
+def to_won(amount: Decimal, rate: Decimal | None) -> Decimal:
+    """A price entered in dollars, in whole won (rounding on the server, reply 34)."""
+    return amount if rate is None else (amount * rate).quantize(Decimal(1), ROUND_HALF_UP)
+
+
 def post_receipt(db: Session, user: User, body: ReceiptIn, req_hash: str) -> StockDocument:
     now = db_now(db)
     doc_date = body.doc_date or now
     check_date_bounds(doc_date, now)
     _check_locations(db, (line.location_id for line in body.lines))
+    rate = usd_rate(db) if body.price_currency == "USD" else None
     products = _lock_products(db, (line.product_id for line in body.lines), exclusive=True)
 
-    lines, deltas = [], []
+    lines, deltas, prices = [], [], []
     for i, line in enumerate(body.lines, 1):
         p = products[line.product_id]
         qty = _qty_base(line, p)
-        cost = (line.unit_price / p.unit_size).quantize(COST_QUANT)
-        lines.append(StockDocumentLine(line_no=i, product_id=p.id, location_to_id=line.location_id, qty_base=qty, unit_price=line.unit_price, unit_cost_base=cost))
+        price = to_won(line.unit_price, rate)
+        if price >= Decimal("1e12"):
+            raise error(422, "Price is too large", "invalid_value", product_id=p.id)
+        prices.append(price)
+        cost = (price / p.unit_size).quantize(COST_QUANT)
+        lines.append(StockDocumentLine(line_no=i, product_id=p.id, location_to_id=line.location_id, qty_base=qty, unit_price=price, unit_cost_base=cost))
         deltas.append(Delta(p.id, line.location_id, qty, cost))
 
-    doc = _new_doc(body, DocType.receipt, user, doc_date, req_hash, supplier=body.supplier or None, invoice_no=body.invoice_no or None)
+    doc = _new_doc(body, DocType.receipt, user, doc_date, req_hash, supplier=body.supplier or None, invoice_no=body.invoice_no or None,
+                   price_rate=rate)
     doc.lines = lines
     _post(db, user, doc, deltas, check_negative=False, pre_check=_backdate_hook(db, user, doc, body.confirm_backdate))
 
     # Latest price wins, but a backdated receipt never overrides a newer price (architecture section 4).
-    for line in body.lines:
+    for line, price in zip(body.lines, prices, strict=True):
         p = products[line.product_id]
         if p.price_updated_at is None or doc_date >= p.price_updated_at:
-            p.purchase_price = line.unit_price
+            p.purchase_price = price
             p.price_updated_at = doc_date
     db.flush()
     return doc
 
 
-def post_write_off(db: Session, user: User, body: WriteOffIn, req_hash: str) -> StockDocument:
+def post_write_off(
+    db: Session, user: User, body: WriteOffIn, req_hash: str,
+    pre_check: Callable[[list[tuple[int, int]]], None] | None = None,
+    cost_overrides: dict[int, Decimal] | None = None,
+) -> StockDocument:
+    """pre_check replaces the backdate check, cost_overrides the current cost per base unit (POS sales,
+    app/services/sales.py)."""
     now = db_now(db)
     doc_date = body.doc_date or now
     check_date_bounds(doc_date, now)
@@ -325,14 +350,15 @@ def post_write_off(db: Session, user: User, body: WriteOffIn, req_hash: str) -> 
     lines, deltas = [], []
     for i, line in enumerate(body.lines, 1):
         p = products[line.product_id]
-        qty, cost = _qty_base(line, p), current_cost(p)
+        qty = _qty_base(line, p)
+        cost = (cost_overrides or {}).get(p.id, current_cost(p))
         lines.append(StockDocumentLine(line_no=i, product_id=p.id, location_from_id=line.location_id, qty_base=qty, unit_cost_base=cost))
         deltas.append(Delta(p.id, line.location_id, -qty, cost))
 
     doc = _new_doc(body, DocType.write_off, user, doc_date, req_hash, reason=body.reason)
     doc.lines = lines
     return _post(db, user, doc, deltas, check_negative=True, allow_negative_requested=body.allow_negative,
-                 pre_check=_backdate_hook(db, user, doc, body.confirm_backdate))
+                 pre_check=pre_check or _backdate_hook(db, user, doc, body.confirm_backdate))
 
 
 def post_transfer(db: Session, user: User, body: TransferIn, req_hash: str) -> StockDocument:

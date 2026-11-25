@@ -9,12 +9,12 @@ import { Modal } from "@/components/Modal";
 import { ProductPicker, useActiveProducts } from "@/components/pickers";
 import { Alert, Badge, Button, Card, cn, Input, PageHeader, Select } from "@/components/ui";
 import { api, ApiError } from "@/lib/api";
-import { enqueue, loadQueue, settle, toRequest, type PendingCount } from "@/lib/countQueue";
+import { enqueue, isDefinite, loadQueue, settle, toRequest, type PendingCount } from "@/lib/countQueue";
 import { uuidv4 } from "@/lib/uuid";
 import { errorMessage } from "@/lib/errors";
 import { useDateTime, useMoney, useQty } from "@/lib/format";
-import type { Inventory, InventoryLine, Product } from "@/lib/types";
-import { inputUnits, plain, type Unit } from "@/lib/units";
+import type { Inventory, InventoryLine, PendingDays, Product } from "@/lib/types";
+import { CONTAINERS, inputUnits, plain, type Unit } from "@/lib/units";
 import { DocumentView } from "../documents/DocumentView";
 import { statusTone } from "./InventoryListPage";
 
@@ -51,8 +51,8 @@ function usePendingCounts(inventoryId: number, userId: number, onSent: () => voi
             sentVersion.current[item.productId] = line.version;
             setProblems((p) => ({ ...p, [item.productId]: "" }));
           } catch (err) {
-            const definite = err instanceof ApiError && err.status >= 400 && err.status < 500 && err.status !== 429;
-            if (!definite) return; // offline / server restarting: keep the queue, retry later
+            const definite = err instanceof ApiError && isDefinite(err.status);
+            if (!definite) return; // offline, server restarting or signed out: keep the queue, retry later
             settle(item, null);
             setProblems((p) => ({
               ...p,
@@ -90,7 +90,8 @@ function usePendingCounts(inventoryId: number, userId: number, onSent: () => voi
 
 function CountInput({ line, onSave, disabled }: { line: Pick<InventoryLine, "unit" | "base_unit" | "unit_size" | "counted_base">; onSave: (parts: { qty: string; qty_unit: Unit }[]) => void; disabled?: boolean }) {
   const { t } = useTranslation();
-  const isBottle = line.unit === "bottle";
+  const inner = CONTAINERS[line.unit]; // bottles: full + open ml; packs: full + open g
+  const isBottle = !!inner;
   const [full, setFull] = useState("");
   const [open, setOpen] = useState("");
   const [qty, setQty] = useState("");
@@ -102,7 +103,7 @@ function CountInput({ line, onSave, disabled }: { line: Pick<InventoryLine, "uni
       const f = full.trim() || "0";
       const o = open.trim() || "0";
       if (!isNum(f) || !isNum(o) || (full.trim() === "" && open.trim() === "")) return;
-      onSave([{ qty: f, qty_unit: "bottle" }, { qty: o, qty_unit: "ml" }]);
+      onSave([{ qty: f, qty_unit: line.unit }, { qty: o, qty_unit: inner! }]);
       setFull("");
       setOpen("");
     } else {
@@ -123,12 +124,12 @@ function CountInput({ line, onSave, disabled }: { line: Pick<InventoryLine, "uni
       {isBottle ? (
         <>
           <label className="text-xs text-zinc-500">
-            {t("inventory.fullBottles")}
+            {t(line.unit === "pack" ? "inventory.fullPacks" : "inventory.fullBottles")}
             <Input inputMode="decimal" className="mt-1 w-24" value={full} onChange={(e) => setFull(e.target.value.replace(",", "."))} disabled={disabled} />
           </label>
           <span className="pb-2 text-zinc-400">+</span>
           <label className="text-xs text-zinc-500">
-            {t("inventory.openMl", { size: plain(new Big(line.unit_size)) })}
+            {t(line.unit === "pack" ? "inventory.openG" : "inventory.openMl", { size: plain(new Big(line.unit_size)) })}
             <Input inputMode="decimal" className="mt-1 w-28" value={open} onChange={(e) => setOpen(e.target.value.replace(",", "."))} disabled={disabled} />
           </label>
         </>
@@ -239,11 +240,25 @@ function CompleteDialog({ inv, onClose }: { inv: Inventory; onClose: () => void 
     },
   });
   const uncounted = inv.line_count - inv.counted_count;
+  // Sales of days without a POS write-off are still in the expected quantity: they would read as a shortage (reply 32, P3).
+  const pendingSales = useQuery({
+    queryKey: ["sales-pending", inv.location_id],
+    queryFn: () => api<PendingDays>(`/sales-imports/pending-days?location_id=${inv.location_id}`),
+  }).data;
   return (
     <Modal title={t("inventory.completeTitle", { name: inv.location_name })} onClose={onClose}>
       <div className="space-y-4 text-sm">
         {done.error && <Alert>{errorMessage(done.error, t)}</Alert>}
         <p>{t("inventory.completeExplain")}</p>
+        {pendingSales && pendingSales.days.length > 0 && (
+          <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-amber-900">
+            <p className="font-medium">{t("inventory.pendingSalesTitle")}</p>
+            <p>
+              {t("inventory.pendingSales", { days: pendingSales.days.join(", ") })}
+              {pendingSales.more > 0 && t("inventory.pendingSalesMore", { count: pendingSales.more })}
+            </p>
+          </div>
+        )}
         <dl className="grid grid-cols-3 gap-3 rounded-lg bg-zinc-50 p-3">
           <div>
             <dt className="text-xs text-zinc-500">{t("inventory.surplus")}</dt>

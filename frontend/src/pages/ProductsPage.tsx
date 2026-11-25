@@ -9,9 +9,9 @@ import { Modal } from "@/components/Modal";
 import { Alert, Badge, Button, Field, Input, PageHeader, Select } from "@/components/ui";
 import { api } from "@/lib/api";
 import { errorMessage } from "@/lib/errors";
-import { useMoney, useQty } from "@/lib/format";
+import { useCurrency, useMoney, useQty, type Currency } from "@/lib/format";
 import type { Category, Page, Product, ProductDetail } from "@/lib/types";
-import { BASE_OF, fromBase, plain, toBase, UNITS, type Unit } from "@/lib/units";
+import { BASE_OF, fromBase, isContainer, plain, toBase, UNITS, type Unit } from "@/lib/units";
 
 export function useCategoryName() {
   const { t } = useTranslation();
@@ -42,7 +42,7 @@ interface Draft {
   empty_weight_g: string;
 }
 
-function toDraft(p?: Product): Draft {
+function toDraft(p: Product | undefined, cur: Currency): Draft {
   if (!p)
     return { name: "", sku: "", category_id: "", unit: "bottle", unit_size: "700", purchase_price: "0", min_stock: "0", barcode: "", full_weight_g: "", empty_weight_g: "" };
   return {
@@ -51,7 +51,7 @@ function toDraft(p?: Product): Draft {
     category_id: String(p.category_id),
     unit: p.unit,
     unit_size: plain(new Big(p.unit_size)),
-    purchase_price: plain(new Big(p.purchase_price), 2),
+    purchase_price: plain(cur.toDisplay(p.purchase_price), cur.decimals),  // shown in the display currency
     min_stock: plain(fromBase(p.min_stock_base, p.unit, p)),
     barcode: p.barcode ?? "",
     full_weight_g: p.full_weight_g ?? "",
@@ -65,7 +65,9 @@ function ProductForm({ product, onDone }: { product?: Product; onDone: () => voi
   const { t } = useTranslation();
   const catName = useCategoryName();
   const qc = useQueryClient();
-  const [d, setD] = useState<Draft>(() => toDraft(product));
+  const cur = useCurrency();
+  const [d, setD] = useState<Draft>(() => toDraft(product, cur));
+  const initialPrice = useState(d.purchase_price)[0];
   const [localError, setLocalError] = useState<string | null>(null);
   const cats = useQuery({ queryKey: ["categories"], queryFn: () => api<Category[]>("/categories") });
   const locked = !!product?.units_locked;
@@ -84,23 +86,26 @@ function ProductForm({ product, onDone }: { product?: Product; onDone: () => voi
   function submit(e: FormEvent) {
     e.preventDefault();
     setLocalError(null);
-    if (d.unit === "bottle" && (!isNum(d.unit_size) || Number(d.unit_size) <= 0)) return setLocalError(t("products.errors.bottleSize"));
+    const container = isContainer(d.unit);
+    if (container && (!isNum(d.unit_size) || Number(d.unit_size) <= 0)) return setLocalError(t(d.unit === "pack" ? "products.errors.packSize" : "products.errors.bottleSize"));
     if (!isNum(d.purchase_price) || !isNum(d.min_stock)) return setLocalError(t("products.errors.number"));
-    const unitInfo = { unit: d.unit, base_unit: BASE_OF[d.unit], unit_size: d.unit === "bottle" ? d.unit_size : d.unit === "l" || d.unit === "kg" ? "1000" : "1" };
+    const unitInfo = { unit: d.unit, base_unit: BASE_OF[d.unit], unit_size: container ? d.unit_size : d.unit === "l" || d.unit === "kg" ? "1000" : "1" };
     const isBottle = d.unit === "bottle";
     const body: Record<string, unknown> = {
       name: d.name,
       sku: d.sku,
       category_id: Number(d.category_id),
-      purchase_price: d.purchase_price,
+      price_currency: cur.code,
       min_stock_base: toBase(d.min_stock, d.unit, unitInfo).toString(),
       barcode: d.barcode.trim() || null,
       full_weight_g: isBottle && d.full_weight_g.trim() ? d.full_weight_g.trim() : null,
       empty_weight_g: isBottle && d.empty_weight_g.trim() ? d.empty_weight_g.trim() : null,
     };
+    // Only a changed price is sent: re-sending a dollar price converted back and forth would drift by rounding.
+    if (!product || d.purchase_price.trim() !== initialPrice) body.purchase_price = d.purchase_price;
     if (!locked) {
       body.unit = d.unit;
-      body.unit_size = isBottle ? d.unit_size : null;
+      body.unit_size = container ? d.unit_size : null;
     }
     save.mutate(body);
   }
@@ -136,7 +141,15 @@ function ProductForm({ product, onDone }: { product?: Product; onDone: () => voi
         </Select>
       </Field>
       <Field label={t("products.unit")} hint={locked ? t("products.unitsLocked") : undefined}>
-        <Select value={d.unit} disabled={locked} onChange={(e) => set({ unit: e.target.value as Unit })}>
+        <Select
+          value={d.unit}
+          disabled={locked}
+          onChange={(e) => {
+            const u = e.target.value as Unit;
+            // a sensible size when switching to a container: 700 ml bottle, 200 g pack
+            set({ unit: u, unit_size: u === d.unit ? d.unit_size : u === "pack" ? "200" : u === "bottle" ? "700" : d.unit_size });
+          }}
+        >
           {UNITS.map((u) => (
             <option key={u} value={u}>
               {t(`units.long.${u}`)}
@@ -144,8 +157,8 @@ function ProductForm({ product, onDone }: { product?: Product; onDone: () => voi
           ))}
         </Select>
       </Field>
-      {d.unit === "bottle" ? (
-        <Field label={t("products.bottleSize")}>
+      {isContainer(d.unit) ? (
+        <Field label={t(d.unit === "pack" ? "products.packSize" : "products.bottleSize")} hint={d.unit === "pack" ? t("products.packSizeHint") : undefined}>
           <Input inputMode="decimal" value={d.unit_size} disabled={locked} onChange={(e) => set({ unit_size: e.target.value })} required />
         </Field>
       ) : (
@@ -153,6 +166,7 @@ function ProductForm({ product, onDone }: { product?: Product; onDone: () => voi
       )}
       <Field label={t("products.pricePer", { unit: t(`units.one.${d.unit}`) })}>
         <Input inputMode="decimal" value={d.purchase_price} onChange={(e) => set({ purchase_price: e.target.value })} required />
+        {cur.code === "USD" && <span className="mt-1 block text-xs text-zinc-500">{t("products.priceInUsd")}</span>}
       </Field>
       <Field label={t("products.minStockIn", { unit: t(`units.short.${d.unit}`) })} hint={t("products.minStockHint")}>
         <Input inputMode="decimal" value={d.min_stock} onChange={(e) => set({ min_stock: e.target.value })} required />
@@ -309,7 +323,7 @@ export function ProductsPage() {
         cell: ({ row: { original: p } }) => (
           <div className="inline-flex flex-col items-end gap-1">
             <QtyCell p={p} qtyBase={p.total_qty_base} />
-            {p.is_low_stock && <Badge tone="amber">{t("products.low")}</Badge>}
+            {p.is_low_stock && <Badge tone="red">{t("products.low")}</Badge>}
           </div>
         ),
       },
@@ -357,7 +371,7 @@ export function ProductsPage() {
         searchText={(p) => `${p.name} ${p.sku} ${p.barcode ?? ""}`}
         initialSort={[{ id: "name", desc: false }]}
         onRowClick={(p) => setOpenId(p.id)}
-        rowClassName={(p) => (p.is_active ? undefined : "text-zinc-400")}
+        rowClassName={(p) => (!p.is_active ? "text-zinc-400" : p.is_low_stock ? "bg-red-50 text-red-800" : undefined)}
         empty={t("products.empty")}
       />
       {products.data && (

@@ -28,6 +28,7 @@ services:
       COOKIE_SECURE: ${COOKIE_SECURE:-true}
       INITIAL_ADMIN_USERNAME: ${INITIAL_ADMIN_USERNAME:-}
       INITIAL_ADMIN_PASSWORD: ${INITIAL_ADMIN_PASSWORD:-}
+      RATE_URL: ${RATE_URL:-https://api.frankfurter.dev/v1/latest?base=USD&symbols=KRW}
     depends_on:
       db:
         condition: service_healthy
@@ -45,6 +46,12 @@ services:
       BACKUP_KEEP_DAYS: ${BACKUP_KEEP_DAYS:-14}
     volumes:
       - ./backups:/backups
+    healthcheck:
+      # unhealthy when no dump has succeeded in the last 26 hours (`docker compose ps` shows it)
+      test: ["CMD-SHELL", "find /backups -name '*.dump' -mmin -1560 | grep -q ."]
+      interval: 10m
+      timeout: 10s
+      start_period: 2m
     depends_on:
       db:
         condition: service_healthy
@@ -53,7 +60,8 @@ services:
     build: ./frontend
     restart: unless-stopped
     ports:
-      - "${HTTP_PORT:-8080}:80"
+      # 127.0.0.1: only this computer can open the app. See BIND_ADDR in .env.example.
+      - "${BIND_ADDR:-127.0.0.1}:${HTTP_PORT:-8080}:80"
     depends_on:
       - backend
 

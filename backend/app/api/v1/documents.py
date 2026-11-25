@@ -28,6 +28,7 @@ from app.models import (
     StockDocumentLine,
     StockMovement,
     User,
+    WriteOffReason,
 )
 from app.schemas_docs import (
     DocLineOut,
@@ -82,6 +83,7 @@ def doc_out(db: Session, doc: StockDocument) -> DocOut:
             )
         )
     return DocOut(
+        price_rate=doc.price_rate,
         id=doc.id, type=doc.type, status=doc.status, doc_date=doc.doc_date, reason=doc.reason, supplier=doc.supplier,
         invoice_no=doc.invoice_no, comment=doc.comment, reversal_of=doc.reversal_of,
         reversed_by=db.scalar(select(StockDocument.id).where(StockDocument.reversal_of == doc.id)),
@@ -133,6 +135,8 @@ def create_receipt(body: ReceiptIn, response: Response, db: DbSession, user: Ann
 
 @router.post("/write-offs", response_model=DocOut, status_code=201)
 def create_write_off(body: WriteOffIn, response: Response, db: DbSession, user: Annotated[User, Depends(require(Perm.post_write_off))]) -> DocOut:
+    if body.reason == WriteOffReason.sales:
+        raise HTTPException(422, {"code": "reserved_reason", "message": "Sales are written off through a POS sales import"})
     return _create(db, response, user, "write_off", body, body.id, lambda h: posting.post_write_off(db, user, body, h))
 
 
@@ -287,13 +291,19 @@ def stock(
     else:  # zero rows only matter for products and places still in use
         stmt = stmt.where(or_(StockBalance.qty_base != 0, and_(Product.is_active, Location.is_active)))
     stmt = stmt.order_by(func.lower(Product.name), func.lower(Location.name))
+    rows = db.execute(stmt).all()
+    totals = dict(db.execute(
+        select(StockBalance.product_id, func.sum(StockBalance.qty_base)).where(StockBalance.product_id.in_({p.id for _, p, _, _ in rows}))
+        .group_by(StockBalance.product_id)
+    ).all())
     return [
         StockRow(
             product_id=p.id, product_name=p.name, product_sku=p.sku, category_code=c.code, category_name=c.name,
             unit=p.unit, base_unit=p.base_unit, unit_size=p.unit_size, location_id=b.location_id, location_name=loc,
-            qty_base=b.qty_base, value=b.qty_base * p.purchase_price / p.unit_size,
+            qty_base=b.qty_base, value=b.qty_base * p.purchase_price / p.unit_size, min_stock_base=p.min_stock_base,
+            is_low_stock=p.min_stock_base > 0 and totals.get(p.id, Decimal(0)) <= p.min_stock_base,
         )
-        for b, p, c, loc in db.execute(stmt)
+        for b, p, c, loc in rows
     ]
 
 

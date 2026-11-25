@@ -24,6 +24,10 @@ class Settings(BaseSettings):
     login_user_max_attempts: int = 30
     login_user_window_seconds: int = 900
 
+    # USD -> KRW rate source (app/services/fx.py): free, no key, HTTPS. Change it here if it ever moves.
+    rate_url: str = "https://api.frankfurter.dev/v1/latest?base=USD&symbols=KRW"
+    rate_auto_update: bool = True  # the daily background fetch; tests turn it off
+
 
 @lru_cache
 def get_settings() -> Settings:

@@ -24,3 +24,16 @@ def test_dashboard_numbers(client, admin_h, staff_h, world):
 
 def test_dashboard_requires_login(client):
     assert client.get(f"{P}/dashboard").status_code == 401
+
+
+def test_dashboard_parts_add_up_and_skip_cancelled_counts(client, admin_h, world):
+    receipt(client, admin_h, world, qty="2", price="14.00")  # Main: 28
+    receipt(client, admin_h, world, qty="1", price="14.00", location="bar")  # Bar: 14
+    assert client.patch(f"{P}/locations/{world['bar']}", json={"is_active": False}, headers=admin_h).status_code == 200
+    for _ in range(6):
+        inv = client.post(f"{P}/inventories", json={"location_id": world["main"]}, headers=admin_h).json()
+        assert client.post(f"{P}/inventories/{inv['id']}/cancel", headers=admin_h).status_code == 200
+    d = client.get(f"{P}/dashboard", headers=admin_h).json()
+    assert sum(Decimal(x["value"]) for x in d["by_location"]) == Decimal(d["stock_value"]) == Decimal(42)
+    assert [(x["name"], x["is_active"]) for x in d["by_location"]] == [("Main", True), ("Bar", False)]
+    assert d["recent_inventories"] == []

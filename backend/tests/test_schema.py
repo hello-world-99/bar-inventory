@@ -154,4 +154,5 @@ def test_migrations_downgrade_and_upgrade_roundtrip(engine):
     command.downgrade(cfg, "base")
     command.upgrade(cfg, "head")
     with engine.connect() as c:
-        assert c.scalar(text("SELECT count(*) FROM categories WHERE code IS NOT NULL")) == 5
+        assert c.scalar(text("SELECT count(*) FROM categories WHERE code IS NOT NULL")) == 6  # 5 from 0002 + kitchen (0006)
+        assert c.scalar(text("SELECT count(*) FROM pos_item_components")) == 8  # owner-confirmed norms (0006)

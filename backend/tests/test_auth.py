@@ -83,8 +83,10 @@ def test_admin_cannot_reset_own_password_via_users_endpoint(client, admin, admin
     assert client.get("/api/v1/auth/me", headers=admin_h).status_code == 200
 
 
-def test_currency_decimals_limited_to_price_precision(client, admin_h):
-    assert client.patch("/api/v1/settings", json={"currency_decimals": 3}, headers=admin_h).status_code == 422
+def test_currency_decimals_follow_the_currency(client, admin_h):
+    # KRW 0 / USD 2 (reply 33): a client cannot set them on its own
+    r = client.patch("/api/v1/settings", json={"currency_decimals": 3}, headers=admin_h)
+    assert r.status_code == 200 and r.json()["currency_decimals"] == 0
 
 
 def test_change_password_revokes_other_sessions(client, admin):
@@ -108,3 +110,9 @@ def test_settings_update_validation(client, admin_h):
         headers=admin_h,
     )
     assert r.status_code == 200 and r.json()["currency"] == "KRW" and r.json()["blind_count"] is True
+
+
+def test_change_password_guesses_are_rate_limited(client, admin_h):
+    bad = {"current_password": "wrong-password", "new_password": "another-pass-1"}
+    codes = [client.post("/api/v1/auth/change-password", json=bad, headers=admin_h).status_code for _ in range(11)]
+    assert codes == [400] * 10 + [429]

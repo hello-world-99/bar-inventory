@@ -16,7 +16,9 @@
     "settings": "Settings",
     "operations": "Operations",
     "catalog": "Catalog",
-    "admin": "Administration"
+    "admin": "Administration",
+    "sales": "Sales (POS)",
+    "posItems": "POS norms"
   },
   "common": {
     "save": "Save",
@@ -37,7 +39,9 @@
     "all": "All",
     "deactivate": "Deactivate",
     "activate": "Activate",
-    "noResults": "Nothing found"
+    "noResults": "Nothing found",
+    "close": "Close",
+    "delete": "Delete"
   },
   "auth": {
     "signIn": "Sign in",
@@ -51,7 +55,14 @@
     "unsentExplain_one": "{{count}} count made on this device has not reached the server yet. It stays on this device and is sent when you sign in again and open that count.",
     "unsentExplain_other": "{{count}} counts made on this device have not reached the server yet. They stay on this device and are sent when you sign in again and open that count.",
     "stayIn": "Stay signed in",
-    "signOutAnyway": "Sign out anyway"
+    "signOutAnyway": "Sign out anyway",
+    "changePassword": "Change password",
+    "currentPassword": "Current password",
+    "newPassword": "New password",
+    "repeatPassword": "Repeat new password",
+    "passwordRule": "At least 8 characters.",
+    "passwordsDiffer": "The passwords do not match.",
+    "passwordChanged": "Password changed. Your other devices have been signed out."
   },
   "role": {
     "admin": "Administrator",
@@ -102,16 +113,37 @@
     "title": "Settings",
     "venueName": "Venue name",
     "currency": "Currency (ISO code)",
-    "currencyDecimals": "Currency decimals",
     "timezone": "Time zone",
     "businessDayStart": "Business day starts at",
     "blindCount": "Hide expected quantities during counts",
-    "blindCountHint": "A nudge toward honest counting, not a security control: staff can still see stock levels elsewhere."
+    "blindCountHint": "A nudge toward honest counting, not a security control: staff can still see stock levels elsewhere.",
+    "currencies": {
+      "KRW": "Korean won (₩)",
+      "USD": "US dollar ($)"
+    },
+    "usdNeedsRate": "Set or update the exchange rate first.",
+    "rate": "Exchange rate (won per US dollar)",
+    "rateMode": {
+      "auto": "Automatic (updated daily)",
+      "manual": "Manual"
+    },
+    "manualRate": "₩ per $1",
+    "rateInvalid": "Enter a number between 100 and 100000.",
+    "rateValue": "$1 = ₩{{rate}}",
+    "rateFrom": "· {{source}}, {{date}}",
+    "noRate": "No rate yet. It is fetched in the background; press “Update now” to fetch it at once.",
+    "rateFailed": "Last update failed ({{when}}): {{error}}. The previous rate is kept.",
+    "updateNow": "Update now",
+    "rateHint": "All prices are stored in won. Dollars are shown and typed in at the current rate; changing the currency or the rate never changes stored numbers. Past documents are shown at today's rate too.",
+    "rateNote": "Amounts in USD at ₩{{rate}} per $1 (rate of {{date}})",
+    "updateFailed": "rate update failed",
+    "businessDayHint": "Between closing and the next opening (e.g. 06:00): a count after midnight still belongs to the same day."
   },
   "units": {
     "short": {
       "pcs": "pcs",
       "bottle": "btl",
+      "pack": "pcs",
       "l": "l",
       "ml": "ml",
       "kg": "kg",
@@ -120,6 +152,7 @@
     "long": {
       "pcs": "Pieces",
       "bottle": "Bottles",
+      "pack": "Packs",
       "l": "Liters",
       "ml": "Milliliters",
       "kg": "Kilograms",
@@ -128,6 +161,7 @@
     "one": {
       "pcs": "piece",
       "bottle": "bottle",
+      "pack": "pack",
       "l": "liter",
       "ml": "ml",
       "kg": "kg",
@@ -139,7 +173,8 @@
     "soft_drinks": "Soft drinks",
     "food_ingredients": "Food & ingredients",
     "supplies": "Supplies",
-    "other": "Other"
+    "other": "Other",
+    "kitchen": "Kitchen"
   },
   "products": {
     "new": "New product",
@@ -148,6 +183,8 @@
     "category": "Category",
     "unit": "Unit",
     "bottleSize": "Bottle size (ml)",
+    "packSize": "Pack size (g)",
+    "packSizeHint": "Fixed after the first receipt or count: a pack of another size is a new product.",
     "pricePer": "Purchase price per {{unit}}",
     "price": "Price",
     "minStock": "Minimum stock",
@@ -172,8 +209,10 @@
     "deactivateWarning": "This product still has stock. Deactivating hides it from selection lists; its history is kept.",
     "errors": {
       "bottleSize": "Enter the bottle size in ml.",
-      "number": "Use numbers like 12 or 12.5."
-    }
+      "number": "Use numbers like 12 or 12.5.",
+      "packSize": "Enter the pack size in grams."
+    },
+    "priceInUsd": "In dollars; saved in won at the current rate."
   },
   "locations": {
     "new": "New location",
@@ -202,7 +241,8 @@
     "expired": "Expired",
     "breakage": "Breakage",
     "staff_use": "Staff use",
-    "other": "Other"
+    "other": "Other",
+    "sales": "Sales (POS)"
   },
   "docs": {
     "newReceipt": "New receipt",
@@ -302,6 +342,8 @@
     "conflict": "Someone else counted this item meanwhile. Check their number and recount if needed.",
     "fullBottles": "Full bottles",
     "openMl": "Open bottle, ml (of {{size}})",
+    "fullPacks": "Full packs",
+    "openG": "Open pack, g (of {{size}})",
     "blind": "Expected quantities hidden",
     "addHint": "Found something that is not on the list? Pick it here to count it.",
     "complete": "Complete",
@@ -320,6 +362,97 @@
       "all": "All items",
       "todo": "Not counted yet",
       "diff": "With discrepancies"
-    }
+    },
+    "pendingSalesTitle": "POS sales not written off yet",
+    "pendingSales": "No POS report has been written off at this location for: {{days}}. Upload them on the Sales (POS) page before completing, otherwise those sales show up as a shortage.",
+    "pendingSalesMore": " (and {{count}} more days)"
+  },
+  "sales": {
+    "explain": "Upload the daily “sales by item” report from the POS (.xlsx). The app computes what the kitchen used by the norms and writes it off from stock with one click. Upload each day before completing a night count.",
+    "file": "POS report (.xlsx)",
+    "fileHint": "Exactly as the POS exported it, up to 2 MB",
+    "salesDate": "Sales day",
+    "dateHint": "The file has no date: choose the business day of these sales. Default: the previous business day.",
+    "upload": "Upload",
+    "openExisting": "Open that report",
+    "status": "Status",
+    "statuses": {
+      "draft": "Not written off",
+      "posted": "Written off",
+      "covered": "Counted by inventory",
+      "voided": "Voided"
+    },
+    "itemsSold": "Items sold",
+    "positions_one": "{{count}} POS item",
+    "positions_other": "{{count}} POS items",
+    "uploadedBy": "Uploaded",
+    "closedBy": {
+      "posted": "Written off by",
+      "covered": "Marked by",
+      "voided": "Voided by",
+      "draft": "—"
+    },
+    "none": "No POS reports yet",
+    "reportTitle": "POS sales of {{date}}",
+    "warnings": {
+      "negative_qty": "{{pos_name}} ({{pos_code}}): returns exceed sales ({{qty}}); counted as 0.",
+      "total_mismatch": "The total row of the file says {{file_total}} items, the rows add up to {{sum}}. Check that the file is complete.",
+      "file_date_far": "The file was created on {{created}}, far from the chosen day {{sales_date}}. Is the sales day right?"
+    },
+    "postedAt": "Written off from {{location}}.",
+    "openDocument": "Open the write-off",
+    "coveredBy": "Inventories at {{location}} counted all of this stock after these sales (first: #{{id}}), so nothing was written off. The report is kept for history.",
+    "voidedNote": "This report was voided. Its day can be uploaded again.",
+    "unmappedTitle_one": "{{count}} sold item has no norm",
+    "unmappedTitle_other": "{{count}} sold items have no norm",
+    "unmappedExplainAdmin": "Set a norm for kitchen items (e.g. a new burger). Mark drinks and other non-kitchen items as “not kitchen” so they stop showing up here.",
+    "unmappedExplainStaff": "An administrator has to set norms for these items or mark them as not kitchen. You can still write off the rest.",
+    "selectAll": "Select all",
+    "posItem": "POS item",
+    "code": "Code",
+    "sold": "Sold",
+    "setNorm": "Set norm",
+    "markNotKitchen_one": "Mark {{count}} as not kitchen",
+    "markNotKitchen_other": "Mark {{count}} as not kitchen",
+    "usageTitle": "Kitchen usage",
+    "fromLocation": "Write off from",
+    "pickLocation": "Choose the location to write off from.",
+    "noUsage": "No sold item has a norm yet.",
+    "product": "Product",
+    "used": "Used",
+    "onHand": "On hand → after",
+    "cost": "Cost",
+    "total": "Total",
+    "ackUnmapped_one": "Write off without the {{count}} item that has no norm",
+    "ackUnmapped_other": "Write off without the {{count}} items that have no norm",
+    "writeOff": "Write off from stock",
+    "discard": "Delete this upload",
+    "voidAndReimport": "Void & re-import",
+    "voidTitle": "Void POS sales of {{date}}",
+    "voidExplainPosted": "The write-off is reversed (stock comes back) and the day can be uploaded again.",
+    "voidExplain": "The report is set aside and the day can be uploaded again. Stock does not change.",
+    "void": "Void",
+    "notKitchenTitle_one": "{{count}} item is not kitchen",
+    "notKitchenTitle_other": "{{count}} items are not kitchen",
+    "normTitle": "Norm: {{name}} ({{code}})",
+    "normExplain": "What one sold unit uses. Changes apply to reports not written off yet; written-off reports keep their numbers.",
+    "notKitchenLabel": "Not kitchen (drinks etc.): never written off",
+    "addComponent": "Add product",
+    "preset": {
+      "burger": "Burger: 175 g fries + 200 g meat + bun"
+    },
+    "posItemsExplain": "Every item ever seen in a POS report. New items appear here after the first upload.",
+    "norm": "Norm (per sold unit)",
+    "notKitchen": "Not kitchen",
+    "noNorm": "No norm",
+    "noPosItems": "No POS items yet: upload a POS report first.",
+    "countedBy": "Not written off: counted by inventory #{{id}} on {{at}}",
+    "willBeSkipped": "Will be skipped: inventory #{{id}} counted it on {{at}}, after these sales",
+    "skipExplain_one": "{{count}} product was already counted by an inventory after these sales; it is skipped so it is not taken off twice. The rest is written off.",
+    "skipExplain_other": "{{count}} products were already counted by an inventory after these sales; they are skipped so they are not taken off twice. The rest is written off.",
+    "manualCorrection": "Manual correction",
+    "runningOut": "running out",
+    "pricePer": "Price per {{unit}}",
+    "editHint": "Quantities (in g, ml or pcs) and prices can be corrected before writing off; the result is recalculated at once."
   }
 }

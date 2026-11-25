@@ -4,7 +4,8 @@ import { formatQty, fromBase, inputUnits, plain, toBase, type Unit, type UnitInf
 const bottle: UnitInfo = { unit: "bottle", base_unit: "ml", unit_size: "700.000" };
 const kg: UnitInfo = { unit: "kg", base_unit: "g", unit_size: "1000.000" };
 const pcs: UnitInfo = { unit: "pcs", base_unit: "pcs", unit_size: "1.000" };
-const short: Record<Unit, string> = { pcs: "pcs", bottle: "btl", l: "l", ml: "ml", kg: "kg", g: "g" };
+const short: Record<Unit, string> = { pcs: "pcs", bottle: "btl", pack: "pk", l: "l", ml: "ml", kg: "kg", g: "g" };
+const pack: UnitInfo = { unit: "pack", base_unit: "g", unit_size: "200.000" };
 const label = (u: Unit) => short[u];
 
 describe("units", () => {
@@ -37,5 +38,17 @@ describe("units", () => {
     expect(formatQty("1250", kg, label).main).toBe("1.25 kg");
     expect(formatQty("3.000", pcs, label).main).toBe("3 pcs");
     expect(plain(toBase("0.0005", "kg", kg))).toBe("0.5");
+  });
+
+  it("packs of 200 g: entered as packs + grams, shown with the total in grams (reply 37)", () => {
+    expect(toBase("2", "pack", pack).toString()).toBe("400");
+    expect(toBase("0.45", "kg", pack).toString()).toBe("450");
+    expect(() => toBase("1", "pack", bottle)).toThrow();
+    expect(() => toBase("1", "bottle", pack)).toThrow();
+    expect(inputUnits(pack)).toEqual(["pack", "g", "kg"]);
+    expect(formatQty("400", pack, label)).toEqual({ main: "2 pk", alt: "400 g" });
+    expect(formatQty("450", pack, label)).toEqual({ main: "2 pk + 50 g", alt: "450 g" });
+    expect(formatQty("50", pack, label)).toEqual({ main: "50 g" });
+    expect(formatQty("0", pack, label)).toEqual({ main: "0 pk" });
   });
 });

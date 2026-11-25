@@ -72,14 +72,16 @@ export interface RequestOptions extends Omit<RequestInit, "body"> {
 export async function api<T>(path: string, opts: RequestOptions = {}): Promise<T> {
   const { body, noRetry, headers, ...rest } = opts;
   const h = new Headers(headers);
-  if (body !== undefined) h.set("Content-Type", "application/json");
+  // A Blob (e.g. an uploaded .xlsx) is sent as is; the caller sets its Content-Type. Anything else is JSON.
+  const raw = body instanceof Blob;
+  if (body !== undefined && !raw) h.set("Content-Type", "application/json");
   if (accessToken) h.set("Authorization", `Bearer ${accessToken}`);
 
   const res = await fetch(`/api/v1${path}`, {
     ...rest,
     headers: h,
     credentials: "same-origin",
-    body: body === undefined ? undefined : JSON.stringify(body),
+    body: body === undefined ? undefined : raw ? body : JSON.stringify(body),
   });
 
   if (res.status === 401 && !noRetry && !path.startsWith("/auth/login")) {

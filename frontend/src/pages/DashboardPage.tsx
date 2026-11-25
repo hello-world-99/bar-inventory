@@ -61,7 +61,10 @@ export function DashboardPage() {
                   {d.by_location.map((l) => (
                     <li key={l.location_id} className="flex items-center justify-between gap-3 py-2.5">
                       <div className="min-w-0">
-                        <div className="truncate text-sm font-medium">{l.name}</div>
+                        <div className="flex items-center gap-2">
+                          <span className="truncate text-sm font-medium">{l.name}</span>
+                          {!l.is_active && <Badge>{t("common.inactive")}</Badge>}
+                        </div>
                         <div className="text-xs text-zinc-500">{t("dashboard.positions", { count: l.product_count })}</div>
                       </div>
                       <div className="text-sm tabular-nums">{money(l.value)}</div>
@@ -83,7 +86,7 @@ export function DashboardPage() {
                         <div className="text-xs text-zinc-500">{p.sku}</div>
                       </div>
                       <div className="text-right text-sm tabular-nums">
-                        <div className={cn(Number(p.total_qty_base) <= 0 && "text-red-700")}>{qty(p.total_qty_base, p).main}</div>
+                        <div className="font-semibold text-red-700">{qty(p.total_qty_base, p).main}</div>
                         <div className="text-xs text-zinc-500">{t("dashboard.min", { qty: qty(p.min_stock_base, p).main })}</div>
                       </div>
                     </li>

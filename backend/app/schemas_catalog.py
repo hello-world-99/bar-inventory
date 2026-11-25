@@ -1,6 +1,6 @@
 from datetime import datetime
 from decimal import Decimal
-from typing import Annotated
+from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints
 
@@ -99,6 +99,7 @@ class ProductCreate(BaseModel):
     unit: Unit
     unit_size: Annotated[Decimal, Field(gt=0, max_digits=14, decimal_places=3)] | None = None
     purchase_price: Money = Decimal("0")
+    price_currency: Literal["KRW", "USD"] = "KRW"  # USD: converted to won at the current rate (reply 34)
     min_stock_base: Qty = Decimal("0")
     barcode: Barcode | None = None
     full_weight_g: Weight | None = None
@@ -112,6 +113,7 @@ class ProductUpdate(BaseModel):
     unit: Unit | None = None
     unit_size: Annotated[Decimal, Field(gt=0, max_digits=14, decimal_places=3)] | None = None
     purchase_price: Money | None = None
+    price_currency: Literal["KRW", "USD"] = "KRW"
     min_stock_base: Qty | None = None
     barcode: Barcode | None = None
     full_weight_g: Weight | None = None

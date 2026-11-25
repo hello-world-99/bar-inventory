@@ -10,6 +10,7 @@ BASE_OF: dict[Unit, BaseUnit] = {
     Unit.ml: BaseUnit.ml,
     Unit.l: BaseUnit.ml,
     Unit.bottle: BaseUnit.ml,
+    Unit.pack: BaseUnit.g,
     Unit.g: BaseUnit.g,
     Unit.kg: BaseUnit.g,
     Unit.pcs: BaseUnit.pcs,
@@ -28,11 +29,16 @@ class UnitError(ValueError):
     pass
 
 
+# Containers: a bottle of N ml, a pack of N g. Their size is set per product; the unit itself is meaningful only
+# for products counted in it (a "bottle" of flour is not a thing).
+CONTAINERS: dict[Unit, str] = {Unit.bottle: "Bottle size (ml)", Unit.pack: "Pack size (g)"}
+
+
 def resolve_unit_size(unit: Unit, unit_size: Decimal | None) -> Decimal:
-    """unit_size is user-defined only for bottles; every other unit has a fixed size."""
-    if unit == Unit.bottle:
+    """unit_size is user-defined only for containers (bottles, packs); every other unit has a fixed size."""
+    if unit in CONTAINERS:
         if unit_size is None or unit_size <= 0:
-            raise UnitError("Bottle size (ml) is required and must be positive")
+            raise UnitError(f"{CONTAINERS[unit]} is required and must be positive")
         return unit_size.quantize(QTY_QUANT)
     fixed = FIXED_SIZE[unit]
     if unit_size is not None and unit_size != fixed:
@@ -44,11 +50,11 @@ def factor(qty_unit: Unit, product_unit: Unit, base_unit: BaseUnit, unit_size: D
     """How many base units one `qty_unit` holds for this product.
 
     Accepted: the product's own unit, its base unit, and the metric unit of the same base (l for ml, kg for g).
-    A bottle is only meaningful for bottle products.
+    A bottle (pack) is only meaningful for bottle (pack) products.
     """
     if qty_unit == product_unit:
         return unit_size
-    if BASE_OF[qty_unit] != base_unit or qty_unit == Unit.bottle:
+    if BASE_OF[qty_unit] != base_unit or qty_unit in CONTAINERS:
         raise UnitError(f"Quantity in '{qty_unit.value}' is not compatible with a product measured in '{product_unit.value}'")
     return FIXED_SIZE[qty_unit]
 
