@@ -64,8 +64,8 @@ function rowValues(item: UsageItem, e: UsageEdit | undefined, cur: Currency) {
   return { qtyBase, price, amount, valid };
 }
 
-function UsageRow({ item, draft, editable, edit, onEdit }: {
-  item: UsageItem; draft: boolean; editable: boolean; edit: UsageEdit | undefined; onEdit: (e: UsageEdit) => void;
+function UsageRow({ item, draft, editable, priceEditable, edit, onEdit }: {
+  item: UsageItem; draft: boolean; editable: boolean; priceEditable: boolean; edit: UsageEdit | undefined; onEdit: (e: UsageEdit) => void;
 }) {
   const { t } = useTranslation();
   const qty = useQty();
@@ -130,7 +130,7 @@ function UsageRow({ item, draft, editable, edit, onEdit }: {
         </td>
       )}
       <td className="py-2 text-right whitespace-nowrap text-zinc-600">
-        {editable && !covered ? (
+        {priceEditable && !covered ? (
           <div className="inline-flex flex-col items-end gap-1">
             <label className="inline-flex items-center gap-1">
               <Input
@@ -279,7 +279,7 @@ function VoidDialog({ report, onClose }: { report: SalesImport; onClose: () => v
 }
 
 function PostPanel({ report, locationId, lines, valid }: {
-  report: SalesImport; locationId: number | null; lines: { product_id: number; qty_base: string; unit_price: string }[]; valid: boolean;
+  report: SalesImport; locationId: number | null; lines: { product_id: number; qty_base: string; unit_price?: string }[]; valid: boolean;
 }) {
   const cur = useCurrency();
   const { t } = useTranslation();
@@ -368,7 +368,8 @@ export function SalesReportPage() {
   const allValid = r.items.every((i) => rowValues(i, edits[i.product_id], cur).valid);
   const lines = r.items
     .filter((i) => edits[i.product_id] && i.covered_inventory_id === null)
-    .map((i) => ({ product_id: i.product_id, qty_base: edits[i.product_id].qty.trim(), unit_price: edits[i.product_id].price.trim() }));
+    // the price is sent only by admins (reply 41, P1); staff corrects quantities
+    .map((i) => ({ product_id: i.product_id, qty_base: edits[i.product_id].qty.trim(), ...(can("manage_catalog") ? { unit_price: edits[i.product_id].price.trim() } : {}) }));
 
   return (
     <div>
@@ -469,6 +470,7 @@ export function SalesReportPage() {
                     item={i}
                     draft={draft}
                     editable={editable}
+                    priceEditable={editable && can("manage_catalog")}
                     edit={edits[i.product_id]}
                     onEdit={(e) => setEdits((x) => ({ ...x, [i.product_id]: e }))}
                   />

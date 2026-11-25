@@ -473,6 +473,8 @@ def test_quantities_and_prices_corrected_in_the_report_are_written_off(client, d
         {"product_id": kitchen["KIT-FISH"], "qty_base": "0"},  # not written off at all
     ]
     r = post(client, staff_h, rep, kitchen["loc"], acknowledge_unmapped=True, lines=lines)
+    assert r.status_code == 403 and r.json()["detail"]["code"] == "price_not_allowed"  # prices: admin only (reply 41)
+    r = post(client, admin_h, rep, kitchen["loc"], acknowledge_unmapped=True, lines=lines)
     assert r.status_code == 200, r.text
     done = r.json()
     used = by_sku(done)
@@ -499,3 +501,11 @@ def test_stock_rows_flag_products_running_out(client, db, admin_h, kitchen):
     client.patch(f"{P}/products/{kitchen['KIT-FRIES']}", json={"min_stock_base": "3000"}, headers=admin_h)
     rows = {r["product_sku"]: r for r in client.get(f"{P}/stock", headers=admin_h).json()}
     assert rows["KIT-FISH"]["is_low_stock"] is True and rows["KIT-FRIES"]["is_low_stock"] is False
+
+
+def test_staff_may_correct_quantities_without_prices(client, db, admin_h, staff_h, kitchen):
+    stock_up(client, admin_h, kitchen, FULL_STOCK)
+    rep = upload(client, staff_h).json()
+    r = post(client, staff_h, rep, kitchen["loc"], acknowledge_unmapped=True, lines=[{"product_id": kitchen["KIT-FRIES"], "qty_base": "2000"}])
+    assert r.status_code == 200, r.text
+    assert balance(db, kitchen["KIT-FRIES"], kitchen["loc"]) == 8000

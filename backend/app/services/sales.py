@@ -27,6 +27,7 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session, selectinload
 
 from app.api.v1.settings import load_settings
+from app.core.permissions import Perm, has_perm
 from app.core.units import QTY_QUANT
 from app.models import (
     Inventory,
@@ -290,7 +291,10 @@ def post(db: Session, user: User, import_id: uuid.UUID, body: PostIn) -> SalesIm
     if not totals:
         raise error(422, "Nothing to write off: no sold item has a norm", "nothing_to_write_off")
     # Quantities corrected in the report: the difference is kept as a "manual correction" part of the breakdown.
-    rate = posting.usd_rate(db) if body.price_currency == "USD" and any(x.unit_price is not None for x in body.lines) else None
+    priced = any(x.unit_price is not None for x in body.lines)
+    if priced and not has_perm(user.role, Perm.manage_catalog):  # prices are an admin function (reply 41, P1)
+        raise error(403, "Only an administrator can change the cost of a write-off", "price_not_allowed")
+    rate = posting.usd_rate(db) if body.price_currency == "USD" and priced else None
     price_in: dict[int, Decimal] = {}
     for x in body.lines:
         if x.product_id not in totals:
