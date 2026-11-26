@@ -332,7 +332,9 @@ Every completed count therefore still sees exactly what it saw (`Σ movements �
 **Example data:**
 - `python -m app.cli seed-example` — one POS day from the owner's file with a receipt.
 - `examples/pos/` — a generated week (17–23.11), followed on the live install by the owner's own day 24.11 (`seed-example`, unchanged): kitchen items with made-up burger codes `9000xx`, weekend peaks, a few drinks.
-- `examples/load_week.py` — loads that week through the API: receipts without prices (17.11, then 19.11 and 21.11 refills), burger norms, drinks as "not kitchen", write-offs. A few products end the week in red.
+- `examples/load_week.py` — loads that week through the API: receipts without prices (17.11, then 19.11 and 21.11 refills), burger norms, drinks as "not kitchen", write-offs. A few products end the week in red. By default the week is moved to the seven business days before yesterday (`--original-dates` keeps 17–23.11), so a new install gets recent dates.
+- `examples/load_low_stock.py` — operations over the last nine hours: a delivery to a *Freezer*, transfers, spoilage, a staff meal, breakage, a refill and a count with shortages; quantities relative to the stock, never below zero.
+- `examples/load_examples.py` — all three in order (week, `seed-example` for yesterday, low stock); run by `examples.bat` / `examples.sh` in a one-off backend container (`docker compose run --rm --no-deps -v ./examples:/examples:ro backend …`), so the computer needs only Docker. Refuses when POS reports exist.
 
 ## 12. Frontend
 

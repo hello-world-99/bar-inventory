@@ -34,6 +34,7 @@ if (-not (Test-Path ".env")) {
 $port = "8080"
 $m = Select-String -Path ".env" -Pattern '^HTTP_PORT=(\d+)' | Select-Object -First 1
 if ($m) { $port = $m.Matches[0].Groups[1].Value }
+if ($env:HTTP_PORT) { $port = $env:HTTP_PORT }  # compose prefers the environment over .env: do the same
 $url = "http://localhost:$port"
 
 Wait-Docker

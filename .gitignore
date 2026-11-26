@@ -7,3 +7,7 @@ node_modules/
 dist/
 agent-room/state/
 agent-room/STOP
+
+# kept on this computer only (owner, 2026-11-26)
+agent-room/
+/myExcel*.xlsx

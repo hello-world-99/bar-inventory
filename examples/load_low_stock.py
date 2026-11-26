@@ -4,9 +4,9 @@ below the minimum), one at exactly zero and NONE below zero.
 
     python examples/load_low_stock.py [http://localhost:8080]     # admin password as for examples/load_week.py
 
-Run after examples/load_week.py and the owner's day (seed-example). The operations are dated today (business day of
-the installation) between 07:00 and 16:00 KST, so the current time must be past 16:00; the closing count is done now.
-Some quantities are relative to the stock at the moment of the run (buns down to 4, Philly meat down to its minimum).
+Run after examples/load_week.py and the owner's day (seed-example); examples.bat / ./examples.sh run all three.
+The operations are dated over the last nine hours, one an hour; the closing count is done now. Quantities are
+relative to the stock at the moment of the run (and skipped when there is not enough), so nothing goes below zero.
 Document ids are fixed per day (uuid5): a second run on the same day stops at once and changes nothing.
 """
 
@@ -15,7 +15,7 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 
-from load_week import call, ok, password
+from load_week import call, login, ok
 
 KST = timezone(timedelta(hours=9))
 NS = uuid.UUID("6f0c3a52-2c61-4c55-9a3b-1a7a0b4e9d01")
@@ -27,14 +27,13 @@ def doc_id(name: str, day: str) -> str:
 
 
 def main() -> None:
-    tok = ok(call("POST", "/auth/login", {"username": "admin", "password": password()}), "login")["access_token"]
-    now = datetime.now(KST)
-    if now.hour < 16:
-        sys.exit("Run after 16:00 KST: the example operations are dated today 07:00-16:00")
+    tok = login()
+    now = datetime.now(KST).replace(second=0, microsecond=0)
     day = now.date().isoformat()
 
     def at(hh: int) -> str:
-        return f"{day}T{hh:02d}:00:00+09:00"
+        """The example's hour hh (7..16) mapped onto the last nine hours: 07:00 -> now - 9 h, 16:00 -> now."""
+        return (now - timedelta(hours=16 - hh, minutes=1)).isoformat()
 
     if call("GET", f"/documents/{doc_id('receipt to the freezer', day)}", token=tok)[0] == 200:
         sys.exit(f"The low-stock example is already loaded for {day}")
@@ -63,9 +62,13 @@ def main() -> None:
     post("/transfers", "freezer to kitchen", {"doc_date": at(8), "from_location_id": freezer, "to_location_id": kitchen,
                                                "lines": [line("KIT-FRIES", 5, "kg"), line("KIT-BURGER-MEAT", 5, "pack")]})
     # 09:00-11:00 losses in the kitchen
-    post("/write-offs", "spoilage: fish", {"doc_date": at(9), "reason": "spoilage", "lines": [line("KIT-FISH", 4, "pcs", kitchen)]})
-    post("/write-offs", "staff meal", {"doc_date": at(10), "reason": "staff_use", "lines": [
-        line("KIT-PHILLY-MEAT", 3, "pack", kitchen), line("KIT-BURGER-MEAT", 2, "pack", kitchen)]})
+    fish = stock("KIT-FISH", kitchen)
+    if fish >= 2:
+        post("/write-offs", "spoilage: fish", {"doc_date": at(9), "reason": "spoilage",
+                                               "lines": [line("KIT-FISH", min(4, fish // 2), "pcs", kitchen)]})
+    meal = [line(sku, 400, "g", kitchen) for sku in ("KIT-PHILLY-MEAT", "KIT-BURGER-MEAT") if stock(sku, kitchen) >= 400]
+    if meal:
+        post("/write-offs", "staff meal", {"doc_date": at(10), "reason": "staff_use", "lines": meal})
     # burger buns down to 4 (minimum 5): LOW
     bun = stock("KIT-BURGER-BUN", kitchen)
     if bun > 4:
@@ -85,12 +88,13 @@ def main() -> None:
     # now: a count in the kitchen with shortages: Philly buns 3 (minimum 4), no fish left, 500 g of wings missing
     # the count is done now, after every document above (a backdated document after it would need confirming)
     inv = ok(call("POST", "/inventories", {"location_id": kitchen, "comment": COMMENT}, token=tok), "start count")
-    wings = stock("KIT-WINGS", kitchen) - 500
-    for sku, qty, unit in (("KIT-PHILLY-BUN", 3, "pcs"), ("KIT-FISH", 0, "pcs"), ("KIT-WINGS", wings, "g")):
+    wings = max(stock("KIT-WINGS", kitchen) - 500, Decimal(0))
+    buns = min(stock("KIT-PHILLY-BUN", kitchen), Decimal(3))
+    for sku, qty, unit in (("KIT-PHILLY-BUN", buns, "pcs"), ("KIT-FISH", 0, "pcs"), ("KIT-WINGS", wings, "g")):
         ok(call("PUT", f"/inventories/{inv['id']}/lines/{pid[sku]}", {"parts": [{"qty": str(qty), "qty_unit": unit}]}, token=tok),
            f"count {sku}")
     ok(call("POST", f"/inventories/{inv['id']}/complete", {}, token=tok), "complete count")
-    print("now    count in the kitchen: Philly buns 3, fish 0, wings -500 g")
+    print(f"{now:%H:%M}  count in the kitchen: Philly buns {buns}, fish 0, wings -500 g")
 
     print("\nStock at the end:")
     for r in ok(call("GET", "/stock?include_zero=true", token=tok), "stock"):

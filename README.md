@@ -1,27 +1,75 @@
 # Bar Inventory
 
-Web application for stock control and inventory counts in a small bar: products, storage locations, receipts, write-offs, transfers, inventory counts with discrepancy costing, and a full movement journal.
+Web application for stock control and inventory counts in a small bar: products, storage locations, receipts, write-offs, transfers, inventory counts, daily POS sales import with kitchen norms, a stock chart per product and a full movement journal. Quantities only: no prices are shown.
 
 - Requirements: [`docs/requirements.md`](docs/requirements.md) (English translation; the owner's original is [`docs/requirements.ru.md`](docs/requirements.ru.md))
 - Architecture and agreed design decisions: [`docs/architecture.md`](docs/architecture.md)
 
-**Status:** MVP complete (stages 1–6). First delivery: one computer, local use. A VPS with HTTPS is described below for later.
+## Quick start
 
-## Install on one computer (Windows)
+**You need:** [Docker Desktop](https://www.docker.com/products/docker-desktop/) on Windows or macOS, or Docker Engine with the Compose plugin on Linux (`docker compose version` must work). Nothing else: no Python, no Node.
 
-1. Install [Docker Desktop](https://www.docker.com/products/docker-desktop/) and start it once. In its Settings → General, turn on **"Start Docker Desktop when you sign in"** so the app comes back by itself after a reboot.
-2. Double-click **`start.bat`** in this folder.
-   - The first run creates `.env` with random secrets, builds the app (a few minutes) and prints the first password for the user **`admin`**.
-   - Then it opens http://localhost:8080 in the browser. Later runs only start it and open the browser.
-3. Sign in as `admin` with that password, then **Change password** (bottom of the left menu).
-4. Open `.env` in Notepad and delete the value after `INITIAL_ADMIN_PASSWORD=`.
-5. Add staff accounts on the **Users** page, and products and locations in the catalog.
+```bash
+git clone <this repository> bar-inventory
+cd bar-inventory
+```
 
-`stop.bat` stops the app; data is kept. Everything restarts by itself with Docker Desktop.
+| | Windows | Linux / macOS |
+|---|---|---|
+| Start (first run: creates `.env`, builds for a few minutes) | double-click **`start.bat`** | `./start.sh` |
+| Load example data (optional, fresh install only) | double-click **`examples.bat`** | `./examples.sh` |
+| Stop (data is kept) | **`stop.bat`** | `./stop.sh` |
+
+1. **Start.** The first run creates `.env` with random secrets, builds and starts the app, and prints the first password for the user **`admin`**. On Windows it starts Docker Desktop if needed and opens the browser.
+2. **Open** http://localhost:8080 and sign in as `admin` with that password.
+3. **Change the password**: *Change password* at the bottom of the left menu. Then delete the value after `INITIAL_ADMIN_PASSWORD=` in `.env` (the start script keeps reminding you until you do).
+4. **Set up:** staff accounts on the *Users* page; products and storage places in the catalog. The kitchen products and POS norms of the owner's bar come with the database.
+
+Port 8080 is taken? Set `HTTP_PORT=` in `.env` before the first start (or later, then start again).
+
+On Windows, turn on **"Start Docker Desktop when you sign in"** in Docker Desktop → Settings → General: the app then comes back by itself after a reboot. On Linux, enable the Docker service (`sudo systemctl enable --now docker`); the containers restart with it.
 
 By default only this computer can open the app (`BIND_ADDR=127.0.0.1`). To use tablets on the bar's Wi-Fi, see the comments at `BIND_ADDR` in `.env.example`: they need `BIND_ADDR=0.0.0.0` **and** `COOKIE_SECURE=false`. Otherwise they are signed out every 15 minutes, because without HTTPS browsers keep the sign-in cookie only on `localhost`.
 
 **Backups:** the app makes a backup every day into the `backups` folder next to this file (see "Backups"). That folder is on the same disk as the data. Copy it regularly to a USB stick or to a OneDrive / Google Drive folder — once a day if you can, at least once a week.
+
+### Example data
+
+`examples.bat` / `./examples.sh` fill a **fresh** install with a realistic picture, through the same API as the UI:
+
+1. a week of POS days with receipts (`examples/pos/`), moved to the seven days before yesterday;
+2. the owner's own POS day (`backend/app/examples/pos_day.xlsx`) for yesterday;
+3. operations over the last nine hours that run some products low: a delivery to a *Freezer*, transfers, spoilage, a staff meal, breakage, a refill and a count with shortages. Some products end red (at or below the minimum), one at exactly zero.
+
+It uses the `admin` password from `.env`, or asks for it. It refuses to run when the database already has POS reports.
+
+### Start over with an empty database
+
+**This deletes all data** (make a dump first if any of it matters, see "Backups"):
+
+```bash
+docker compose down -v      # stops the app and deletes its database volume
+```
+
+Then start again; to get a new first password too, delete `.env` before starting (a new one with new secrets is created). Do not delete `.env` while the old database volume still exists: the database keeps the password it was created with.
+
+### Update to a new version
+
+```bash
+git pull
+docker compose up -d --build     # or start.bat / ./start.sh
+```
+
+Database migrations run by themselves when the backend starts. A dump is made every day anyway; before a big update you can make one by hand (`docker compose exec backup pgtool dump`).
+
+### Without the start scripts
+
+```bash
+cp .env.example .env          # then put random values into POSTGRES_PASSWORD, JWT_SECRET and INITIAL_ADMIN_PASSWORD
+docker compose up -d --build
+```
+
+On first start the backend creates the administrator from `INITIAL_ADMIN_USERNAME` / `INITIAL_ADMIN_PASSWORD` if no users exist. Alternatively: `docker compose exec backend python -m app.cli create-admin <username>`.
 
 ## Daily POS sales (kitchen usage)
 
@@ -29,48 +77,23 @@ By default only this computer can open the app (`BIND_ADDR=127.0.0.1`). To use t
 
 - **Upload each day's report before you complete a night count.** A count completed after the sales already contains them. The app then refuses to write those sales off, because they would be counted twice. Mark such a report as covered by that inventory instead. The count's completion dialog lists the days not written off yet.
 - `business_day_starts_at` in Settings must lie between closing and the next opening (e.g. 06:00). A count made after midnight then still belongs to the same day.
-- Before writing off, the used quantity (in g, ml or pcs) and the price of each product can be corrected right in the report. The cost and the stock "after" are recalculated at once, and a correction shows up in the breakdown as "Manual correction".
-- Products at or below their minimum stock are shown in red: in the report, on Stock and Products, and on the dashboard. Set the minimum in the product card.
+- Before writing off, the used quantity (in g, ml or pcs) of each product can be corrected right in the report; the stock "after" is recalculated at once, and a correction shows up in the breakdown as "Manual correction". A written-off day can be corrected later too, also after an inventory.
+- **Stock never goes below zero.** A day that sells more than the shelf has is refused with the product and the missing quantity: record the missing receipt or count the stock first.
+- Products at or below their minimum stock (total over all places) are shown in red: in the report, on Stock and Products, and on the dashboard. Set the minimum in the product card.
 - Items without a norm are listed on top of the report. An administrator sets a norm (there is a one-click burger preset) or marks drinks as "not kitchen". Changing a norm does not change reports already written off.
 - A day can be written off only once, and the same sales cannot be uploaded under two dates. To redo a day, an administrator uses **Void & re-import**: the write-off is reversed.
 
 Meat is counted in **packs** of 200 g, converted to grams: a count can be entered as "2 packs + 50 g". The pack size of a product is fixed after its first receipt or count; a pack of another size is a new product.
 
-**Example data:** `docker compose exec backend python -m app.cli seed-example` loads one day of the owner's POS report on a fresh install:
-- a receipt marked "Example data" to the kitchen;
-- the day's report, with drinks marked "not kitchen";
-- the write-off.
-
-It refuses to run twice.
+Click a product on **Stock** or **Products** for its card: stock by place and a chart of the stock at the end of each business day (7 / 30 / 90 days, with the minimum, and what came in and went out each day).
 
 ## Currency
 
-Money is stored in **won**. **Settings → Currency** chooses how it is shown and typed in:
-- **KRW** (default, no decimals);
-- **USD**, at the won-per-dollar rate.
-
-The rate is fetched once a day from the European Central Bank reference rates. The address is `RATE_URL` in `.env`; the request carries no data about the bar. You can also type the rate in (manual mode). If an update fails, the last rate is kept and the menu says so.
-
-Changing the currency or the rate never changes stored numbers. A receipt priced in dollars is converted to won at the current rate, and the document keeps that rate. Past documents shown in dollars use today's rate. Rates by document date are not kept.
+The app shows quantities only (owner's decision). Prices and costs are still stored in **won** in the background, and the USD→KRW rate support is kept but hidden: the daily rate fetch is off (`RATE_AUTO_UPDATE=false`).
 
 ## Stack
 
 FastAPI + SQLAlchemy 2 + PostgreSQL 16 (backend, `backend/`), React + TypeScript + Vite + Tailwind (frontend, `frontend/`), Docker Compose. The REST API (`/api/v1`, OpenAPI at `/api/docs`) is the contract for the web client and for a future mobile app or POS integration.
-
-## Running without start.bat
-
-Requires Docker (Docker Desktop on Windows/macOS).
-
-```bash
-cp .env.example .env          # then edit every secret in .env
-docker compose up -d --build
-```
-
-Open http://localhost:8080. On first start the backend creates the administrator from `INITIAL_ADMIN_USERNAME` / `INITIAL_ADMIN_PASSWORD` if no users exist; remove the password from `.env` afterwards. Alternatively:
-
-```bash
-docker compose exec backend python -m app.cli create-admin <username>
-```
 
 ## Production (VPS with HTTPS)
 

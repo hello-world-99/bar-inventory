@@ -1,8 +1,12 @@
 """Load the example week (examples/pos/pos_2026-11-17 ... 23) into a running app through its API, as an admin.
-The owner's own example day (24.11, his original file) is loaded separately by `python -m app.cli seed-example`.
+The owner's own example day (his original file) is loaded separately by `python -m app.cli seed-example`, for the
+previous business day. Easiest: `examples.bat` / `./examples.sh` load everything (examples/load_examples.py).
 
-    python examples/load_week.py [http://localhost:8080]       # admin password from .env INITIAL_ADMIN_PASSWORD
-                                                                # or the BAR_ADMIN_PASSWORD environment variable
+    python examples/load_week.py [http://localhost:8080] [--original-dates]
+        # admin password from .env INITIAL_ADMIN_PASSWORD or the BAR_ADMIN_PASSWORD environment variable
+
+By default the week is moved to the seven business days before yesterday, so that it ends right before the owner's
+day and every date is recent (the app refuses documents older than a year). --original-dates keeps 17-23.11.2026.
 
 Meant for a fresh install with the kitchen products of migration 0006 and no POS reports for these days. It:
   * creates the location "Kitchen" if missing and sets example minimum stocks of the kitchen products;
@@ -18,10 +22,14 @@ import sys
 import urllib.error
 import urllib.request
 import uuid
+from datetime import date, datetime, time, timedelta
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 ROOT = Path(__file__).resolve().parent.parent
-BASE = (sys.argv[1] if len(sys.argv) > 1 else "http://localhost:8080").rstrip("/") + "/api/v1"
+ARGS = [a for a in sys.argv[1:] if not a.startswith("--")]
+BASE = (ARGS[0] if ARGS else "http://localhost:8080").rstrip("/") + "/api/v1"
+LAST_ORIGINAL_DAY = date(2026, 11, 23)
 XLSX = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 PREPARED = ["Minji", "Jun", "Sora", "Minji", "Hyun", "Jun", "Sora"]
 
@@ -70,8 +78,28 @@ def ok(res, what):
     return body
 
 
+def login() -> str:
+    user = os.environ.get("BAR_ADMIN_USERNAME", "admin")
+    return ok(call("POST", "/auth/login", {"username": user, "password": password()}), "login")["access_token"]
+
+
+def current_business_day(tok: str) -> date:
+    s = ok(call("GET", "/settings", token=tok), "settings")
+    start = time.fromisoformat(s["business_day_starts_at"])
+    local = datetime.now(ZoneInfo(s["timezone"]))
+    return local.date() - timedelta(days=1) if local.time() < start else local.date()
+
+
+def shift_days(tok: str) -> timedelta:
+    """How far the example week moves: its last day becomes the day before yesterday (yesterday is the owner's day)."""
+    if "--original-dates" in sys.argv:
+        return timedelta(0)
+    return (current_business_day(tok) - timedelta(days=2)) - LAST_ORIGINAL_DAY
+
+
 def main() -> None:
-    tok = ok(call("POST", "/auth/login", {"username": "admin", "password": password()}), "login")["access_token"]
+    tok = login()
+    shift = shift_days(tok)
     locs = ok(call("GET", "/locations?active=active", token=tok), "locations")
     loc = next((x["id"] for x in locs if x["name"].lower() == "kitchen"), None)
     if loc is None:
@@ -80,10 +108,10 @@ def main() -> None:
     for sku, minimum in MINIMUMS.items():
         ok(call("PATCH", f"/products/{prods[sku]}", {"min_stock_base": str(minimum)}, token=tok), f"minimum {sku}")
 
-    receipts = dict(RECEIPTS)
+    receipts = {(date.fromisoformat(d) + shift).isoformat(): lines for d, lines in RECEIPTS}
     days = sorted((ROOT / "examples" / "pos").glob("pos_*.xlsx"))
     for n, f in enumerate(days):
-        day = f.stem.split("_")[1]
+        day = (date.fromisoformat(f.stem.split("_")[1]) + shift).isoformat()
         if day in receipts:
             lines = [{"product_id": prods[s], "location_id": loc, "qty": q, "qty_unit": u} for s, q, u in receipts[day]]
             ok(call("POST", "/receipts", {"id": str(uuid.uuid4()), "doc_date": f"{day}T05:00:00+09:00", "supplier": "Example supplier",
