@@ -11,7 +11,6 @@ class Perm(str, enum.Enum):
     post_receipt = "post_receipt"
     post_write_off = "post_write_off"
     post_transfer = "post_transfer"
-    allow_negative = "allow_negative"
     backdate = "backdate"  # post a document dated before the last completed inventory
     reverse_document = "reverse_document"
     inventory_count = "inventory_count"  # start an inventory, enter counted quantities (blind)

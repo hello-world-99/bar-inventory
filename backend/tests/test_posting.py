@@ -138,18 +138,20 @@ def test_write_off_requires_reason(client, admin_h, world):
     assert client.post(f"{P}/write-offs", json=body, headers=admin_h).status_code == 422
 
 
-def test_negative_stock_rules(client, db, admin_h, staff_h, world):
+def test_stock_never_goes_negative(client, db, admin_h, staff_h, world):
+    """Owner (reply 96): no negative balance for anyone, the old override flag is ignored."""
     receipt(client, admin_h, world, qty="1")
-    r = write_off(client, staff_h, world, "2")
-    assert r.status_code == 422
-    assert r.json()["detail"]["code"] == "insufficient_stock" and r.json()["detail"]["can_override"] is False
-    r = write_off(client, staff_h, world, "2", allow_negative=True)
-    assert r.status_code == 403
-    r = write_off(client, admin_h, world, "2")
-    assert r.status_code == 422 and r.json()["detail"]["can_override"] is True
-    r = write_off(client, admin_h, world, "2", allow_negative=True)
-    assert r.status_code == 201 and r.json()["allow_negative"] is True
-    assert balance(db, world["vodka"], world["main"]) == -700
+    for h in (staff_h, admin_h):
+        for flag in (False, True):
+            r = write_off(client, h, world, "2", allow_negative=flag)
+            assert r.status_code == 422, r.text
+            d = r.json()["detail"]
+            assert d["code"] == "insufficient_stock" and d["can_override"] is False
+            assert "Vodka" in d["message"] and "700 ml in stock" in d["message"] and "1400 ml needed" in d["message"]
+            assert d["items"][0]["available"] == "700.000" and d["items"][0]["requested"] == "1400.000"
+    assert write_off(client, staff_h, world, "1").status_code == 201  # down to exactly zero is fine
+    assert balance(db, world["vodka"], world["main"]) == 0
+    assert db.execute(text("SELECT count(*) FROM stock_balances WHERE qty_base < 0")).scalar() == 0
     assert_journal_consistent(db)
 
 
@@ -224,13 +226,13 @@ def test_reverse_transfer_and_write_off(client, db, admin_h, world):
     assert_journal_consistent(db)
 
 
-def test_reverse_receipt_after_stock_was_used_needs_override(client, db, admin_h, world):
+def test_reverse_receipt_after_stock_was_used_is_refused(client, db, admin_h, world):
     doc = receipt(client, admin_h, world, qty="1").json()
     write_off(client, admin_h, world, "1")
-    r = client.post(f"{P}/documents/{doc['id']}/reverse", json={"id": str(uuid.uuid4())}, headers=admin_h)
-    assert r.status_code == 422 and r.json()["detail"]["code"] == "insufficient_stock"
-    r = client.post(f"{P}/documents/{doc['id']}/reverse", json={"id": str(uuid.uuid4()), "allow_negative": True}, headers=admin_h)
-    assert r.status_code == 201
+    for flag in (False, True):
+        r = client.post(f"{P}/documents/{doc['id']}/reverse", json={"id": str(uuid.uuid4()), "allow_negative": flag}, headers=admin_h)
+        assert r.status_code == 422 and r.json()["detail"]["code"] == "insufficient_stock"
+    assert balance(db, world["vodka"], world["main"]) == 0
 
 
 def test_reverse_refused_after_inventory_counted_the_pair(client, db, admin, admin_h, world):
@@ -376,3 +378,41 @@ def test_document_lines_show_the_balance_after(client, admin_h, world):
     receipt(client, admin_h, world, qty="5")  # later documents do not change what this one shows
     again = client.get(f"{P}/documents/{r.json()['id']}", headers=admin_h).json()["lines"][0]
     assert Decimal(again["balance_after_from"]) == 1400
+
+
+def test_used_column_counts_net_write_offs_only(client, db, admin_h, world):
+    """Reply 77: "Used" = write-offs (any reason) net of reversals; transfers and receipts are not usage; counts apart."""
+    receipt(client, admin_h, world, qty="10")
+    write_off(client, admin_h, world, "2")                                                   # 1400 ml used
+    w = write_off(client, admin_h, world, "1").json()                                        # 700 ml, then reversed
+    client.post(f"{P}/documents/{w['id']}/reverse", json={"id": str(uuid.uuid4())}, headers=admin_h)
+    client.post(f"{P}/transfers", json={"id": str(uuid.uuid4()), "from_location_id": world["main"], "to_location_id": world["bar"],
+                                         "lines": [{"product_id": world["vodka"], "qty": "3"}]}, headers=admin_h)
+    rows = {r["location_id"]: r for r in client.get(f"{P}/stock", params={"used_days": 7}, headers=admin_h).json() if r["product_id"] == world["vodka"]}
+    assert Decimal(rows[world["main"]]["used_base"]) == 1400 and Decimal(rows[world["bar"]]["used_base"]) == 0
+    assert Decimal(rows[world["main"]]["count_loss_base"]) == 0
+    prods = {p["id"]: p for p in client.get(f"{P}/products", params={"used_days": 1}, headers=admin_h).json()["items"]}
+    assert Decimal(prods[world["vodka"]]["used_base"]) == 1400 and Decimal(prods[world["lime"]]["used_base"]) == 0
+    assert client.get(f"{P}/stock", headers=admin_h).json()[0]["used_base"] is None  # only when asked for
+    assert client.get(f"{P}/stock", params={"used_days": 5}, headers=admin_h).status_code == 422
+
+
+def test_used_period_follows_the_business_day(client, db, admin_h, world):
+    """The period starts at the business day start (06:00 in the installation's time zone)."""
+    from datetime import datetime, timedelta, timezone
+    receipt(client, admin_h, world, qty="10", doc_date=(datetime.now(timezone.utc) - timedelta(days=3)).isoformat())
+    # 2 days ago -> inside 7 days, outside today
+    write_off(client, admin_h, world, "1", doc_date=(datetime.now(timezone.utc) - timedelta(days=2)).isoformat())
+    prods = {p["id"]: p for p in client.get(f"{P}/products", params={"used_days": 1}, headers=admin_h).json()["items"]}
+    assert Decimal(prods[world["vodka"]]["used_base"]) == 0
+    prods = {p["id"]: p for p in client.get(f"{P}/products", params={"used_days": 7}, headers=admin_h).json()["items"]}
+    assert Decimal(prods[world["vodka"]]["used_base"]) == 700
+
+
+def test_count_shortage_is_reported_apart(client, db, admin, admin_h, world):
+    receipt(client, admin_h, world, qty="10")
+    inv = client.post(f"{P}/inventories", json={"location_id": world["main"]}, headers=admin_h).json()
+    client.put(f"{P}/inventories/{inv['id']}/lines/{world['vodka']}", json={"parts": [{"qty": "9", "qty_unit": "bottle"}]}, headers=admin_h)
+    client.post(f"{P}/inventories/{inv['id']}/complete", json={}, headers=admin_h)
+    row = next(r for r in client.get(f"{P}/stock", params={"used_days": 7}, headers=admin_h).json() if r["product_id"] == world["vodka"])
+    assert Decimal(row["used_base"]) == 0 and Decimal(row["count_loss_base"]) == 700

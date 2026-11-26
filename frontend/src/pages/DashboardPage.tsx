@@ -28,7 +28,7 @@ export function DashboardPage() {
         !q.error && <p className="text-sm text-zinc-500">{t("common.loading")}</p>
       ) : (
         <div className="space-y-6">
-          <div className="grid grid-cols-2 gap-3 lg:grid-cols-3">
+          <div className="grid grid-cols-2 gap-3">
             <Stat
               label={t("dashboard.products")}
               value={String(d.product_count)}
@@ -40,13 +40,6 @@ export function DashboardPage() {
               value={String(d.low_stock_count)}
               hint={d.low_stock_count ? t("dashboard.lowStockHint") : t("dashboard.allAboveMin")}
               warn={d.low_stock_count > 0}
-            />
-            <Stat
-              label={t("dashboard.negative")}
-              value={String(d.negative_count)}
-              hint={d.negative_count ? t("dashboard.negativeHint") : t("dashboard.noNegative")}
-              warn={d.negative_count > 0}
-              to="/stock"
             />
           </div>
 

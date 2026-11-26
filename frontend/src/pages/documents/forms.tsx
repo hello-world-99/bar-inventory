@@ -50,7 +50,6 @@ function useDocSubmit(path: string, onDone: (d: StockDocument) => void) {
   const detail = m.error instanceof ApiError ? m.error.detail : undefined;
   return {
     m,
-    needsNegative: detail?.code === "insufficient_stock" && !!detail.can_override,
     needsBackdate: detail?.code === "backdate_confirmation_required",
   };
 }
@@ -73,15 +72,15 @@ function DocHeader({ date, setDate, comment, setComment, children }: { date: str
   );
 }
 
-function SubmitBar({ pending, needsNegative, needsBackdate, onSubmit, onCancel, onOverride }: {
-  pending: boolean; needsNegative: boolean; needsBackdate: boolean; onSubmit?: () => void; onCancel: () => void; onOverride: () => void;
+function SubmitBar({ pending, needsBackdate, onSubmit, onCancel, onOverride }: {
+  pending: boolean; needsBackdate: boolean; onSubmit?: () => void; onCancel: () => void; onOverride: () => void;
 }) {
   const { t } = useTranslation();
   return (
     <div className="flex flex-wrap gap-2">
-      {needsNegative || needsBackdate ? (
+      {needsBackdate ? (
         <Button variant="danger" disabled={pending} onClick={onOverride}>
-          {needsNegative ? t("docs.postNegative") : t("docs.postBackdated")}
+          {t("docs.postBackdated")}
         </Button>
       ) : (
         <Button type="submit" disabled={pending} onClick={onSubmit}>
@@ -108,6 +107,13 @@ function StockMoves({ p, base, moves, locations }: { p: Product; base: string | 
   const stock = useStockMap();
   const shown = moves.filter((m) => m.location_id !== null);
   if (!shown.length) return null;
+  // "running out" is the product's total over all places against its minimum (reply 75), not one place
+  const rows = Array.from(stock.values()).filter((r) => r.product_id === p.id);
+  const totalNow = rows.reduce((s, r) => s.plus(r.qty_base), new Big(0));
+  const totalAfter = base ? shown.reduce((s, m) => s.plus(new Big(base).times(m.sign)), totalNow) : totalNow;
+  const min = new Big(p.min_stock_base);
+  const lowAfter = min.gt(0) && totalAfter.lte(min);
+  const severalPlaces = rows.filter((r) => !new Big(r.qty_base).eq(0)).length > 1 || shown.length > 1;
   return (
     <div className="mt-1 space-y-0.5 text-xs text-zinc-500">
       {shown.map((m) => {
@@ -116,16 +122,21 @@ function StockMoves({ p, base, moves, locations }: { p: Product; base: string | 
         const place = locations.find((l) => l.id === m.location_id)?.name ?? "";
         return (
           <div key={`${m.location_id}-${m.sign}`}>
-            {t("docs.inStock", { place })} <BalanceText qtyBase={now} unit={p} min={p.min_stock_base} />
+            {t("docs.inStock", { place })} <BalanceText qtyBase={now} unit={p} />
             {after !== null && (
               <>
                 {" → "}
-                <BalanceText qtyBase={after} unit={p} min={p.min_stock_base} />
+                <BalanceText qtyBase={after} unit={p} low={lowAfter} />
               </>
             )}
           </div>
         );
       })}
+      {severalPlaces && (
+        <div>
+          {t("docs.totalAllPlaces")} <BalanceText qtyBase={totalAfter.toString()} unit={p} low={lowAfter} />
+        </div>
+      )}
     </div>
   );
 }
@@ -247,7 +258,7 @@ export function ReceiptForm({ onDone, onCancel }: { onDone: (d: StockDocument) =
           </Button>
         </div>
       </div>
-      <SubmitBar pending={m.isPending} needsNegative={false} needsBackdate={needsBackdate} onCancel={onCancel} onOverride={() => send(true)} />
+      <SubmitBar pending={m.isPending} needsBackdate={needsBackdate} onCancel={onCancel} onOverride={() => send(true)} />
     </form>
   );
 }
@@ -262,7 +273,7 @@ export function WriteOffForm({ onDone, onCancel }: { onDone: (d: StockDocument) 
   const [date, setDate] = useState("");
   const [comment, setComment] = useState("");
   const [localErr, setLocalErr] = useState<string | null>(null);
-  const { m, needsNegative, needsBackdate } = useDocSubmit("/write-offs", onDone);
+  const { m, needsBackdate } = useDocSubmit("/write-offs", onDone);
   const tz = useTimeZone();
 
   function send(override = false) {
@@ -271,7 +282,7 @@ export function WriteOffForm({ onDone, onCancel }: { onDone: (d: StockDocument) 
     if (err) return;
     m.mutate({
       reason, comment, doc_date: isoOrUndefined(date, tz),
-      allow_negative: override && needsNegative, confirm_backdate: override && needsBackdate,
+      confirm_backdate: override && needsBackdate,
       lines: lines.map((l) => ({ product_id: l.product_id, location_id: l.location_id, qty: l.qty, qty_unit: l.qty_unit })),
     });
   }
@@ -303,7 +314,7 @@ export function WriteOffForm({ onDone, onCancel }: { onDone: (d: StockDocument) 
           <Plus className="h-4 w-4" /> {t("docs.addLine")}
         </Button>
       </div>
-      <SubmitBar pending={m.isPending} needsNegative={needsNegative} needsBackdate={needsBackdate} onCancel={onCancel} onOverride={() => send(true)} />
+      <SubmitBar pending={m.isPending} needsBackdate={needsBackdate} onCancel={onCancel} onOverride={() => send(true)} />
     </form>
   );
 }
@@ -319,7 +330,7 @@ export function TransferForm({ onDone, onCancel }: { onDone: (d: StockDocument) 
   const [date, setDate] = useState("");
   const [comment, setComment] = useState("");
   const [localErr, setLocalErr] = useState<string | null>(null);
-  const { m, needsNegative, needsBackdate } = useDocSubmit("/transfers", onDone);
+  const { m, needsBackdate } = useDocSubmit("/transfers", onDone);
   const tz = useTimeZone();
 
   function send(override = false) {
@@ -328,7 +339,7 @@ export function TransferForm({ onDone, onCancel }: { onDone: (d: StockDocument) 
     if (err) return;
     m.mutate({
       from_location_id: from, to_location_id: to, comment, doc_date: isoOrUndefined(date, tz),
-      allow_negative: override && needsNegative, confirm_backdate: override && needsBackdate,
+      confirm_backdate: override && needsBackdate,
       lines: lines.map((l) => ({ product_id: l.product_id, qty: l.qty, qty_unit: l.qty_unit })),
     });
   }
@@ -353,7 +364,7 @@ export function TransferForm({ onDone, onCancel }: { onDone: (d: StockDocument) 
           <Plus className="h-4 w-4" /> {t("docs.addLine")}
         </Button>
       </div>
-      <SubmitBar pending={m.isPending} needsNegative={needsNegative} needsBackdate={needsBackdate} onCancel={onCancel} onOverride={() => send(true)} />
+      <SubmitBar pending={m.isPending} needsBackdate={needsBackdate} onCancel={onCancel} onOverride={() => send(true)} />
     </form>
   );
 }

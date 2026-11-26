@@ -259,13 +259,18 @@ def test_post_writes_off_the_usage_at_the_start_of_the_sales_day(client, db, adm
     assert by_sku(client.get(f"{P}/sales-imports/{rep['id']}", headers=admin_h).json()) == REFERENCE
 
 
-def test_negative_stock_follows_the_usual_rules(client, db, admin_h, staff_h, kitchen):
+def test_pos_day_cannot_take_more_than_in_stock(client, db, admin_h, staff_h, kitchen):
+    """Owner (reply 96): a POS day selling more than the shelf has is refused with a clear message, even for an admin;
+    the report stays a draft until the receipt or the count is recorded."""
     rep = upload(client, staff_h).json()
-    r = post(client, staff_h, rep, kitchen["loc"], acknowledge_unmapped=True)
-    assert r.status_code == 422 and r.json()["detail"]["code"] == "insufficient_stock" and r.json()["detail"]["can_override"] is False
-    r = post(client, admin_h, rep, kitchen["loc"], acknowledge_unmapped=True, allow_negative=True)
-    assert r.status_code == 200, r.text
-    assert balance(db, kitchen["KIT-FRIES"], kitchen["loc"]) == -2025
+    for h, flag in ((staff_h, False), (admin_h, True)):
+        r = post(client, h, rep, kitchen["loc"], acknowledge_unmapped=True, allow_negative=flag)
+        assert r.status_code == 422 and r.json()["detail"]["code"] == "insufficient_stock" and r.json()["detail"]["can_override"] is False
+        assert "post the missing receipt or count the stock first" in r.json()["detail"]["message"]
+    assert client.get(f"{P}/sales-imports/{rep['id']}", headers=staff_h).json()["status"] == "draft"
+    assert balance(db, kitchen["KIT-FRIES"], kitchen["loc"]) == 0
+    stock_up(client, admin_h, kitchen, FULL_STOCK)
+    assert post(client, staff_h, rep, kitchen["loc"], acknowledge_unmapped=True).status_code == 200
 
 
 def test_sales_reason_is_reserved_for_imports(client, admin_h, kitchen):
@@ -595,7 +600,7 @@ def test_correction_after_a_count_keeps_the_counted_stock(client, db, admin_h, s
                           {"p": kitchen["KIT-FISH"], "d": doc["doc_date"]}).scalar()
     assert at_start == -4  # the 4 sales now leave at the start of the day, before the count
     comp = db.execute(text("SELECT type, doc_date, (SELECT sum(qty_base) FROM stock_document_lines WHERE document_id = d.id) "
-                           "FROM stock_documents d WHERE sales_import_id = :i"), {"i": rep["id"]}).all()
+                           "FROM stock_documents d WHERE sales_import_id = :i AND type = 'inventory_adjustment'"), {"i": rep["id"]}).all()
     assert len(comp) == 1 and comp[0][0] == "inventory_adjustment" and comp[0][1] == at and comp[0][2] == 4
     assert_journal_consistent(db)
     # the retry is the same request
@@ -659,6 +664,38 @@ def test_who_prepared_the_report(client, db, admin_h, staff_h, kitchen, staff):
     assert r.status_code == 422
 
 
+def test_pos_documents_show_the_reports_author(client, db, admin_h, staff_h, kitchen):
+    """Owner: the write-off's "By" must match the report's author, everywhere (list, journal, card)."""
+    stock_up(client, admin_h, kitchen, FULL_STOCK)
+    rep = upload(client, staff_h).json()
+    done = post(client, staff_h, rep, kitchen["loc"], acknowledge_unmapped=True, prepared_by="Park").json()
+    wo = client.get(f"{P}/sales-imports/{rep['id']}", headers=staff_h).json()["write_off_id"]
+
+    def authors():
+        card = client.get(f"{P}/documents/{wo}", headers=staff_h).json()
+        listed = {d["id"]: d["created_by_name"] for d in client.get(f"{P}/documents", params={"limit": 200}, headers=staff_h).json()["items"]}
+        journal = {m["user_name"] for m in client.get(f"{P}/journal", params={"limit": 1000}, headers=staff_h).json()["items"] if m["document_id"] == wo}
+        return card, listed, journal
+
+    card, listed, journal = authors()
+    assert card["created_by_name"] == "Park" and card["entered_by_name"] == "staff" and card["sales_import_id"] == rep["id"]
+    assert listed[wo] == "Park" and journal == {"Park"}
+    assert client.get(f"{P}/documents", params={"limit": 200}, headers=staff_h).json()["items"]  # receipts keep the account
+    assert any(n == "admin" for i, n in listed.items() if i != wo)
+    # a renamed signature follows at once, no document is touched
+    client.patch(f"{P}/sales-imports/{rep['id']}", json={"prepared_by": "Lee"}, headers=admin_h)
+    card, listed, journal = authors()
+    assert card["created_by_name"] == "Lee" and listed[wo] == "Lee" and journal == {"Lee"}
+    # a correction: the reversal and the new write-off are the report's too
+    fries = next(i for i in done["items"] if i["product_sku"] == "KIT-FRIES")
+    body = {"document_id": str(uuid.uuid4()), "reversal_id": str(uuid.uuid4()),
+            "lines": [{"product_id": kitchen["KIT-FRIES"], "qty_base": str(Decimal(fries["written_off_base"]) + 100)}]}
+    assert client.post(f"{P}/sales-imports/{rep['id']}/correct", json=body, headers=admin_h).status_code == 200
+    for doc_id in (body["reversal_id"], body["document_id"]):
+        d = client.get(f"{P}/documents/{doc_id}", headers=staff_h).json()
+        assert d["created_by_name"] == "Lee" and d["entered_by_name"] == "admin" and d["sales_import_id"] == rep["id"]
+
+
 
 def assert_counts_hold(db):
     """Reply 50: every completed count still sees exactly what it saw."""
@@ -712,6 +749,6 @@ def test_compensation_document_points_to_its_report(client, db, admin_h, staff_h
     complete(client, admin_h, inv)
     body = {"document_id": str(uuid.uuid4()), "reversal_id": str(uuid.uuid4()), "lines": [{"product_id": kitchen["KIT-FRIES"], "qty_base": "2000"}]}
     client.post(f"{P}/sales-imports/{rep['id']}/correct", json=body, headers=admin_h)
-    comp_id = db.execute(text("SELECT id FROM stock_documents WHERE sales_import_id = :i"), {"i": rep["id"]}).scalar()
+    comp_id = db.execute(text("SELECT id FROM stock_documents WHERE sales_import_id = :i AND type = 'inventory_adjustment'"), {"i": rep["id"]}).scalar()
     doc = client.get(f"{P}/documents/{comp_id}", headers=admin_h).json()
     assert doc["sales_import_id"] == rep["id"] and doc["type"] == "inventory_adjustment"

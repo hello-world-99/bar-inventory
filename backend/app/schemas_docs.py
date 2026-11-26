@@ -121,7 +121,8 @@ class DocOut(BaseModel):
     allow_negative: bool
     backdate_confirmed: bool
     created_by: int
-    created_by_name: str
+    created_by_name: str  # POS documents: the report's author (prepared_by)
+    entered_by_name: str = ""  # the account that posted it
     created_at: datetime
     posted_at: datetime | None
     inventory_id: int | None
@@ -194,6 +195,9 @@ class StockRow(BaseModel):
     value: Decimal  # current-price valuation, unrounded
     min_stock_base: Decimal = Decimal(0)
     is_low_stock: bool = False  # the product's total over all locations is at or below its minimum
+    # Usage in this place over the requested period (`used_days`); None when not requested (app/services/usage.py)
+    used_base: Decimal | None = None
+    count_loss_base: Decimal | None = None
 
 
 class ReconcileRow(BaseModel):

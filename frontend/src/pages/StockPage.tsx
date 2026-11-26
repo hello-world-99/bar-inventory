@@ -10,7 +10,7 @@ import { api } from "@/lib/api";
 import { errorMessage } from "@/lib/errors";
 import { useQty } from "@/lib/format";
 import type { StockRow } from "@/lib/types";
-import { useCategoryName } from "./ProductsPage";
+import { ProductView, useCategoryName } from "./ProductsPage";
 
 export function StockPage() {
   const { t } = useTranslation();
@@ -20,6 +20,7 @@ export function StockPage() {
   const [location, setLocation] = useState("");
   const [search, setSearch] = useState("");
   const [includeZero, setIncludeZero] = useState(false);
+  const [openId, setOpenId] = useState<number | null>(null);
 
   const params = new URLSearchParams({ ...(location ? { location_id: location } : {}), ...(includeZero ? { include_zero: "true" } : {}) });
   const rows = useQuery({ queryKey: ["stock", params.toString()], queryFn: () => api<StockRow[]>(`/stock?${params}`) });
@@ -93,7 +94,9 @@ export function StockPage() {
         searchText={(r) => `${r.product_name} ${r.product_sku} ${r.location_name}`}
         initialSort={[{ id: "product", desc: false }]}
         empty={t("stock.empty")}
+        onRowClick={(r) => setOpenId(r.product_id)}
       />
+      {openId !== null && <ProductView id={openId} onClose={() => setOpenId(null)} />}
     </>
   );
 }

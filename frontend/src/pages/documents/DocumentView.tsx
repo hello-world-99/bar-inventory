@@ -1,4 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import Big from "big.js";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Link } from "react-router-dom";
@@ -6,10 +7,10 @@ import { useAuth } from "@/auth/AuthContext";
 import { BalanceText } from "@/components/BalanceText";
 import { Modal } from "@/components/Modal";
 import { Alert, Badge, Button, Field, Input } from "@/components/ui";
-import { api, ApiError } from "@/lib/api";
+import { api } from "@/lib/api";
 import { errorMessage } from "@/lib/errors";
 import { useDateTime, useQty } from "@/lib/format";
-import type { StockDocument } from "@/lib/types";
+import type { StockDocument, DocLine } from "@/lib/types";
 import { uuidv4 } from "@/lib/uuid";
 
 const REVERSIBLE = new Set(["receipt", "write_off", "transfer"]);
@@ -19,12 +20,9 @@ function ReverseDialog({ doc, onClose, onDone }: { doc: StockDocument; onClose: 
   const [id] = useState(uuidv4); // reused on retry: the server treats the same id as the same request
   const [comment, setComment] = useState("");
   const rev = useMutation({
-    mutationFn: (allowNegative: boolean) =>
-      api<StockDocument>(`/documents/${doc.id}/reverse`, { method: "POST", body: { id, comment, allow_negative: allowNegative } }),
+    mutationFn: () => api<StockDocument>(`/documents/${doc.id}/reverse`, { method: "POST", body: { id, comment } }),
     onSuccess: onDone,
   });
-  const detail = rev.error instanceof ApiError ? rev.error.detail : undefined;
-  const canOverride = detail?.code === "insufficient_stock" && detail.can_override;
 
   return (
     <Modal title={t("docs.reverseTitle")} onClose={onClose}>
@@ -35,21 +33,39 @@ function ReverseDialog({ doc, onClose, onDone }: { doc: StockDocument; onClose: 
           <Input value={comment} onChange={(e) => setComment(e.target.value)} maxLength={1000} autoFocus />
         </Field>
         <div className="flex flex-wrap gap-2">
-          {canOverride ? (
-            <Button variant="danger" disabled={rev.isPending} onClick={() => rev.mutate(true)}>
-              {t("docs.reverseNegative")}
-            </Button>
-          ) : (
-            <Button variant="danger" disabled={rev.isPending} onClick={() => rev.mutate(false)}>
-              {t("docs.reverse")}
-            </Button>
-          )}
+          <Button variant="danger" disabled={rev.isPending} onClick={() => rev.mutate()}>
+            {t("docs.reverse")}
+          </Button>
           <Button variant="secondary" onClick={onClose}>
             {t("common.cancel")}
           </Button>
         </div>
       </div>
     </Modal>
+  );
+}
+
+/** How much there was at each place right before this line (owner: "how much there was before the change").
+ * The source side lost |qty|, the destination gained it: before = after -/+ |qty|. */
+function BeforeCell({ line }: { line: DocLine }) {
+  const q = new Big(line.qty_base).abs();
+  const both = line.balance_after_from !== null && line.balance_after_to !== null;
+  if (line.balance_after_from === null && line.balance_after_to === null) return <span className="text-zinc-400">—</span>;
+  return (
+    <span className="tabular-nums">
+      {line.balance_after_from !== null && (
+        <span className="block">
+          {both && `${line.location_from_name}: `}
+          <BalanceText qtyBase={new Big(line.balance_after_from).plus(q).toString()} unit={line} />
+        </span>
+      )}
+      {line.balance_after_to !== null && (
+        <span className="block">
+          {both && `${line.location_to_name}: `}
+          <BalanceText qtyBase={new Big(line.balance_after_to).minus(q).toString()} unit={line} />
+        </span>
+      )}
+    </span>
   );
 }
 
@@ -73,11 +89,10 @@ export function DocumentView({ id, onClose }: { id: string; onClose: () => void 
           <div className="flex flex-wrap gap-2">
             {d.reversed_by && <Badge tone="red">{t("docs.reversed")}</Badge>}
             {d.reversal_of && <Badge tone="amber">{t("docs.isReversal")}</Badge>}
-            {d.allow_negative && <Badge tone="red">{t("docs.negativeAllowed")}</Badge>}
             {d.backdate_confirmed && <Badge tone="amber">{t("docs.backdated")}</Badge>}
             {d.sales_import_id && (
               <Link className="text-sm underline" to={`/sales/${d.sales_import_id}`} onClick={onClose}>
-                {t("docs.posCompensation")}
+                {d.type === "inventory_adjustment" ? t("docs.posCompensation") : t("docs.posReport")}
               </Link>
             )}
           </div>
@@ -88,7 +103,12 @@ export function DocumentView({ id, onClose }: { id: string; onClose: () => void 
             </div>
             <div>
               <dt className="text-xs text-zinc-500">{t("docs.author")}</dt>
-              <dd className="font-medium">{d.created_by_name}</dd>
+              <dd className="font-medium">
+                {d.created_by_name}
+                {d.entered_by_name && d.entered_by_name !== d.created_by_name && (
+                  <div className="text-xs font-normal text-zinc-500">{t("docs.enteredBy", { name: d.entered_by_name })}</div>
+                )}
+              </dd>
             </div>
             {d.reason && (
               <div>
@@ -122,7 +142,8 @@ export function DocumentView({ id, onClose }: { id: string; onClose: () => void 
                 <tr>
                   <th className="px-3 py-2 font-medium">{t("products.name")}</th>
                   <th className="px-3 py-2 font-medium">{t("docs.location")}</th>
-                  <th className="px-3 py-2 text-right font-medium">{t("docs.qty")}</th>
+                  <th className="px-3 py-2 text-right font-medium">{t("docs.before")}</th>
+                  <th className="px-3 py-2 text-right font-medium">{t("journal.change")}</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-zinc-100">
@@ -141,20 +162,32 @@ export function DocumentView({ id, onClose }: { id: string; onClose: () => void 
                         </div>
                       </td>
                       <td className="px-3 py-2">{where}</td>
+                      <td className="px-3 py-2 text-right">
+                        <BeforeCell line={l} />
+                      </td>
                       <td className="px-3 py-2 text-right tabular-nums">
-                        {f.main}
-                        {f.alt && <div className="text-xs text-zinc-500">{f.alt}</div>}
-                        {/* the balance right after this line, per place (history, not today's stock) */}
-                        {l.balance_after_from !== null && (
-                          <div className="text-xs text-zinc-500">
-                            {l.balance_after_to !== null && `${l.location_from_name}: `}→ <BalanceText qtyBase={l.balance_after_from} unit={l} min={l.min_stock_base} />
-                          </div>
-                        )}
-                        {l.balance_after_to !== null && (
-                          <div className="text-xs text-zinc-500">
-                            {l.balance_after_from !== null && `${l.location_to_name}: `}→ <BalanceText qtyBase={l.balance_after_to} unit={l} min={l.min_stock_base} />
-                          </div>
-                        )}
+                        {/* signed change (owner: "+ when added, − when taken away"), per place; after it the balance */}
+                        {[
+                          { place: l.location_from_name, sign: "−", tone: "text-red-700", after: l.balance_after_from },
+                          { place: l.location_to_name, sign: "+", tone: "text-emerald-700", after: l.balance_after_to },
+                        ]
+                          .filter((x) => x.place)
+                          .map((x, _i, all) => (
+                            <div key={x.sign}>
+                              {all.length > 1 && <span className="text-xs text-zinc-500">{x.place}: </span>}
+                              <span className={`font-medium ${x.tone}`}>
+                                {x.sign}
+                                {f.main.replace(/^−/, "")}
+                              </span>
+                              {x.after !== null && (
+                                <span className="text-xs text-zinc-500">
+                                  {" "}
+                                  → <BalanceText qtyBase={x.after} unit={l} />
+                                </span>
+                              )}
+                            </div>
+                          ))}
+                        {f.alt && <div className="text-xs text-zinc-500">{f.alt.replace(/^−/, "")}</div>}
                       </td>
                     </tr>
                   );

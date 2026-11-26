@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import date, datetime
 from decimal import Decimal
 from typing import Annotated, Literal
 
@@ -86,10 +86,34 @@ class ProductOut(ORM):
     stock_value: Decimal = Decimal("0")  # current-price valuation (architecture section 4)
     is_low_stock: bool = False
     units_locked: bool = False  # unit/base_unit/unit_size are frozen once the product has movements
+    # Usage over all places in the requested period (`used_days`); None when not requested (app/services/usage.py)
+    used_base: Decimal | None = None
+    count_loss_base: Decimal | None = None
 
 
 class ProductDetail(ProductOut):
     balances: list[LocationBalance] = []
+
+
+class HistoryPoint(BaseModel):
+    day: date  # business day
+    balance: Decimal  # over all places at the end of the day, base units
+    qty_in: Decimal  # came in that day (receipts, count surpluses, ...); transfers between places are neither
+    qty_out: Decimal  # went out that day (write-offs, POS sales, count shortages, ...)
+
+
+class HistoryPlace(BaseModel):
+    location_id: int
+    location_name: str
+    balances: list[Decimal]  # one per point
+
+
+class ProductHistory(BaseModel):
+    product_id: int
+    min_stock_base: Decimal
+    days: int
+    points: list[HistoryPoint]
+    places: list[HistoryPlace]
 
 
 class ProductCreate(BaseModel):

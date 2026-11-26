@@ -76,9 +76,6 @@
     "lowStock": "Low stock",
     "lowStockHint": "At or below minimum stock",
     "allAboveMin": "Everything is above its minimum.",
-    "negative": "Negative balances",
-    "negativeHint": "Check these in the next count",
-    "noNegative": "None",
     "byLocation": "Stock by location",
     "positions_one": "{{count}} product",
     "positions_other": "{{count}} products",
@@ -240,20 +237,17 @@
     "from": "From location",
     "to": "To location",
     "post": "Post",
-    "postNegative": "Post anyway (negative stock)",
     "postBackdated": "Post with this earlier date",
     "pickProduct": "Search product, SKU or scan barcode…",
     "pickLocation": "Choose location…",
     "empty": "No documents for this period.",
     "reversed": "Reversed",
     "isReversal": "Reversal",
-    "negativeAllowed": "Negative stock allowed",
     "backdated": "Backdated",
     "reverse": "Reverse",
     "reverseTitle": "Reverse this document?",
     "reverseExplain": "A reversal posts the exact opposite movements. The original stays in the history.",
     "reverseReason": "Reason for the reversal",
-    "reverseNegative": "Reverse anyway (negative stock)",
     "openOriginal": "Open original",
     "openReversal": "Open reversal",
     "posted": "posted",
@@ -266,7 +260,11 @@
     },
     "per": "per",
     "posCompensation": "Correction of a POS report after an inventory — open the report",
-    "inStock": "In stock at {{place}}:"
+    "inStock": "In stock at {{place}}:",
+    "totalAllPlaces": "All places after:",
+    "before": "Before",
+    "posReport": "From a POS report — open the report",
+    "enteredBy": "entered by {{name}}"
   },
   "stock": {
     "allLocations": "All locations",
@@ -433,5 +431,17 @@
     "countedEdit": "Counted by an inventory after these sales: the stock after the count stays as counted; the difference moves between the sales and the count's result.",
     "chooseFile": "Choose file",
     "noFileChosen": "No file chosen"
+  },
+  "history": {
+    "title": "Stock by day",
+    "period": "Period",
+    "days": "{{count}} days",
+    "aria": "Stock at the end of each day over the last {{days}} days",
+    "minimum": "min {{qty}}",
+    "table": "Show as a table",
+    "day": "Day",
+    "in": "In",
+    "out": "Out",
+    "balance": "Stock"
   }
 }

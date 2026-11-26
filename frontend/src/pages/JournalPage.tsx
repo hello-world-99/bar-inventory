@@ -15,8 +15,14 @@ const TYPES: DocType[] = ["receipt", "write_off", "transfer", "inventory_adjustm
 const PAGE = 100;
 const SHOWN = 2; // products named in a journal row; the rest are counted
 
+/** The balance of the place right before this movement. */
+function Before({ m }: { m: Movement }) {
+  return <BalanceText qtyBase={new Big(m.balance_after).minus(m.delta_base).toString()} unit={m} />;
+}
+
 function Balance({ m }: { m: Movement }) {
-  return <BalanceText qtyBase={m.balance_after} unit={m} min={m.min_stock_base} />;
+  // a place's balance at that moment: only a negative one is flagged; "running out" is a total over all places (reply 75)
+  return <BalanceText qtyBase={m.balance_after} unit={m} />;
 }
 
 export function JournalPage() {
@@ -149,13 +155,20 @@ export function JournalPage() {
                               {transfer ? qty(new Big(x.delta_base).abs().toString(), x).main : qty(x.delta_base, x).main}
                             </span>{" "}
                             {/* the balance after the movement (owner, reply 72); red when running out */}
+                            {/* how much there was before the change, and after it (owner) */}
                             {transfer ? (
                               <span className="text-zinc-500">
-                                ({x.location_name} <Balance m={x} /> → {into?.location_name ?? ""} {into && <Balance m={into} />})
+                                ({x.location_name} <Before m={x} /> → <Balance m={x} />; {into?.location_name ?? ""}{" "}
+                                {into && (
+                                  <>
+                                    <Before m={into} /> → <Balance m={into} />
+                                  </>
+                                )}
+                                )
                               </span>
                             ) : (
                               <span className="text-zinc-500">
-                                → <Balance m={x} />
+                                (<Before m={x} /> → <Balance m={x} />)
                               </span>
                             )}
                           </span>

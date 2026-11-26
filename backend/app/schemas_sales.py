@@ -31,6 +31,7 @@ class UsageItem(BaseModel):
     unit_cost_base: Decimal
     amount: Decimal
     balance_base: Decimal | None  # at the chosen location (drafts only)
+    total_base: Decimal | None = None  # over all locations (drafts only): "running out" compares this to the minimum
     min_stock_base: Decimal
     # Not written off: this completed inventory counted it after the sales (drafts: would be skipped).
     covered_inventory_id: int | None = None

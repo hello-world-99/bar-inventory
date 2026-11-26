@@ -123,8 +123,8 @@ One transaction:
    - **The lock order is the same everywhere:** POS report row / count row (if involved) → products → count lines / balances. So there are no deadlocks.
 2. **Checks that depend on other transactions** (backdate, absorption A1 of reversals, POS coverage) run **after the balance locks** (`pre_check` in `_post`). Completing a count locks the same rows before writing `status='completed'`, so under READ COMMITTED the check sees a committed completion (no TOCTOU).
 3. **Negative stock check** (write-off, transfer, reversal):
-   - staff → 422;
-   - admin → allowed with `allow_negative=true`, and the flag is visible in the journal;
+   - everyone → 422;
+   - nobody can override it (owner, reply 96: a bar cannot have less than nothing): the error names each product, place, what is in stock and what is needed, and says to post the missing receipt or count first. `allow_negative` in requests is ignored; documents posted earlier with it keep the flag. A POS day that sells more than the shelf has stays a draft until then;
    - count adjustments and POS compensations are exempt.
 4. **The document is flipped to posted.** Lines are written to a draft, then `UPDATE … SET status='posted' WHERE status='draft'`; 0 rows → 409. Triggers make posted documents and their lines immutable.
 5. **Balances are updated** and movements written, with the `unit_cost_base` snapshot, the document's `doc_date` and `created_at = now()`.

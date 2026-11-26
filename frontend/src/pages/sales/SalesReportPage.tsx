@@ -8,7 +8,7 @@ import { useAuth } from "@/auth/AuthContext";
 import { Modal } from "@/components/Modal";
 import { LocationSelect, useActiveLocations } from "@/components/pickers";
 import { Alert, Badge, Button, Card, cn, Field, Input } from "@/components/ui";
-import { api, ApiError } from "@/lib/api";
+import { api } from "@/lib/api";
 import { errorMessage } from "@/lib/errors";
 import { useCurrency, useDateTime, useQty, type Currency } from "@/lib/format";
 import type { PosLine, SalesImport, SalesImportStatus, SalesWarning, UsageItem } from "@/lib/types";
@@ -76,7 +76,9 @@ function UsageRow({ item, draft, editable, edit, onEdit }: {
   const fixable = !covered || (!draft && editable);
   const v = rowValues(item, edit, cur);
   const after = item.balance_base !== null ? new Big(item.balance_base).minus(v.qtyBase) : null;
-  const low = after !== null && !covered && (after.lt(0) || (new Big(item.min_stock_base).gt(0) && after.lte(item.min_stock_base)));
+  // running out = the product's total over all places after the write-off vs its minimum (reply 75); a negative place too
+  const totalAfter = item.total_base != null ? new Big(item.total_base).minus(v.qtyBase) : after;
+  const low = after !== null && !covered && (after.lt(0) || (totalAfter !== null && new Big(item.min_stock_base).gt(0) && totalAfter.lte(item.min_stock_base)));
   const perUnit = (base: string) => qty(base, baseUnitInfo(item)).main;
   const current = edit ?? { qty: plain(new Big(item.qty_base)), price: plain(v.price, cur.decimals) };
   return (
@@ -318,31 +320,19 @@ function CorrectPanel({ report, lines, valid, onDone, onCancel }: {
   const qc = useQueryClient();
   const [ids] = useState(() => ({ document_id: uuidv4(), reversal_id: uuidv4() })); // same ids on retry
   const save = useMutation({
-    mutationFn: (allowNegative: boolean) =>
-      api<SalesImport>(`/sales-imports/${report.id}/correct`, {
-        method: "POST",
-        body: { ...ids, lines, allow_negative: allowNegative },
-      }),
+    mutationFn: () => api<SalesImport>(`/sales-imports/${report.id}/correct`, { method: "POST", body: { ...ids, lines } }),
     onSuccess: () => {
       void qc.invalidateQueries();
       onDone();
     },
   });
-  const detail = save.error instanceof ApiError ? save.error.detail : undefined;
-  const needsNegative = detail?.code === "insufficient_stock" && !!detail.can_override;
   return (
     <div className="space-y-3">
       {save.error && <Alert>{errorMessage(save.error, t)}</Alert>}
       <div className="flex flex-wrap gap-2">
-        {needsNegative ? (
-          <Button variant="danger" disabled={save.isPending} onClick={() => save.mutate(true)}>
-            {t("docs.postNegative")}
-          </Button>
-        ) : (
-          <Button disabled={save.isPending || !valid || lines.length === 0} onClick={() => save.mutate(false)}>
-            {t("sales.saveCorrections")}
-          </Button>
-        )}
+        <Button disabled={save.isPending || !valid || lines.length === 0} onClick={() => save.mutate()}>
+          {t("sales.saveCorrections")}
+        </Button>
         <Button variant="secondary" disabled={save.isPending} onClick={onCancel}>
           {t("common.cancel")}
         </Button>
@@ -364,10 +354,10 @@ function PostPanel({ report, locationId, lines, valid }: {
     qc.setQueryData(["sales-import", report.id, locationId], r);
   };
   const post = useMutation({
-    mutationFn: (allowNegative: boolean) =>
+    mutationFn: () =>
       api<SalesImport>(`/sales-imports/${report.id}/post`, {
         method: "POST",
-        body: { document_id: docId, location_id: locationId, allow_negative: allowNegative, acknowledge_unmapped: ack, lines },
+        body: { document_id: docId, location_id: locationId, acknowledge_unmapped: ack, lines },
       }),
     onSuccess: done,
   });
@@ -378,8 +368,6 @@ function PostPanel({ report, locationId, lines, valid }: {
       navigate("/sales");
     },
   });
-  const detail = post.error instanceof ApiError ? post.error.detail : undefined;
-  const needsNegative = detail?.code === "insufficient_stock" && !!detail.can_override;
   const skipped = report.items.filter((i) => i.covered_inventory_id !== null).length;
   const blocked = report.unmapped.length > 0 && !ack;
 
@@ -394,15 +382,9 @@ function PostPanel({ report, locationId, lines, valid }: {
       {skipped > 0 && <p className="text-sm text-amber-800">{t("sales.skipExplain", { count: skipped })}</p>}
       {post.error && <Alert>{errorMessage(post.error, t)}</Alert>}
       <div className="flex flex-wrap gap-2">
-        {needsNegative ? (
-          <Button variant="danger" disabled={post.isPending} onClick={() => post.mutate(true)}>
-            {t("docs.postNegative")}
-          </Button>
-        ) : (
-          <Button disabled={post.isPending || !locationId || blocked || !valid || report.items.length === 0} onClick={() => post.mutate(false)}>
-            {t("sales.writeOff")}
-          </Button>
-        )}
+        <Button disabled={post.isPending || !locationId || blocked || !valid || report.items.length === 0} onClick={() => post.mutate()}>
+          {t("sales.writeOff")}
+        </Button>
         <Button variant="secondary" disabled={discard.isPending} onClick={() => discard.mutate()}>
           {t("sales.discard")}
         </Button>

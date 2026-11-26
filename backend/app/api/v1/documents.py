@@ -4,7 +4,7 @@ import uuid
 from collections.abc import Callable
 from datetime import date, datetime, timedelta
 from decimal import Decimal
-from typing import Annotated
+from typing import Annotated, Literal
 from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
@@ -26,6 +26,7 @@ from app.models import (
     StockBalance,
     StockDocument,
     StockDocumentLine,
+    SalesImport,
     StockMovement,
     User,
     WriteOffReason,
@@ -46,6 +47,7 @@ from app.schemas_docs import (
     WriteOffIn,
 )
 from app.services import posting
+from app.services import usage as usage_service
 
 router = APIRouter(tags=["documents"])
 Viewer = Annotated[User, Depends(require(Perm.view))]
@@ -97,14 +99,21 @@ def doc_out(db: Session, doc: StockDocument) -> DocOut:
                 balance_after_from=bal_from, balance_after_to=bal_to, min_stock_base=p.min_stock_base,
             )
         )
+    author, account, report_id = db.execute(
+        select(_author_name, _account_name, SalesImport.id)
+        .select_from(StockDocument)
+        .join(User, User.id == StockDocument.created_by)
+        .outerjoin(SalesImport, _report_of)
+        .where(StockDocument.id == doc.id)
+    ).one()
     return DocOut(
         price_rate=doc.price_rate,
-        sales_import_id=doc.sales_import_id,
+        sales_import_id=report_id,
         id=doc.id, type=doc.type, status=doc.status, doc_date=doc.doc_date, reason=doc.reason, supplier=doc.supplier,
         invoice_no=doc.invoice_no, comment=doc.comment, reversal_of=doc.reversal_of,
         reversed_by=db.scalar(select(StockDocument.id).where(StockDocument.reversal_of == doc.id)),
         allow_negative=doc.allow_negative, backdate_confirmed=doc.backdate_confirmed, created_by=doc.created_by,
-        created_by_name=db.scalar(select(func.coalesce(func.nullif(User.full_name, ""), User.username)).where(User.id == doc.created_by)) or "",
+        created_by_name=author or "", entered_by_name=account or "",
         created_at=doc.created_at, posted_at=doc.posted_at,
         inventory_id=db.scalar(select(Inventory.id).where(Inventory.adjustment_document_id == doc.id)),
         total_amount=sum((line.amount for line in lines), Decimal(0)), lines=lines,
@@ -202,9 +211,10 @@ def list_documents(
         .subquery()
     )
     stmt = (
-        select(StockDocument, totals.c.n, totals.c.amount, reversal.id, func.coalesce(func.nullif(User.full_name, ""), User.username))
+        select(StockDocument, totals.c.n, totals.c.amount, reversal.id, _author_name)
         .join(totals, totals.c.document_id == StockDocument.id)
         .join(User, User.id == StockDocument.created_by)
+        .outerjoin(SalesImport, _report_of)
         .outerjoin(reversal, reversal.reversal_of == StockDocument.id)
     )
     if type:
@@ -235,6 +245,19 @@ def list_documents(
     )
 
 
+# ------------------------------------------------------------------ authors
+# The author of a POS report's documents (write-off, its reversal, a compensation) is the person who made the report
+# (`prepared_by`, owner: "the write-off author must match"), not the account that pressed the button. Documents
+# posted before they carried `sales_import_id` are found through the report's current write-off.
+_report_of = or_(
+    SalesImport.id == StockDocument.sales_import_id,
+    SalesImport.write_off_id == StockDocument.id,
+    and_(StockDocument.reversal_of.is_not(None), SalesImport.write_off_id == StockDocument.reversal_of),
+)
+_account_name = func.coalesce(func.nullif(User.full_name, ""), User.username)
+_author_name = func.coalesce(func.nullif(SalesImport.prepared_by, ""), _account_name)
+
+
 # ------------------------------------------------------------------ journal
 @router.get("/journal", response_model=MovementPage)
 def journal(
@@ -250,11 +273,12 @@ def journal(
 ) -> MovementPage:
     lo, hi = business_range(db, date_from, date_to)
     stmt = (
-        select(StockMovement, StockDocument, Product, Location.name, func.coalesce(func.nullif(User.full_name, ""), User.username))
+        select(StockMovement, StockDocument, Product, Location.name, _author_name)
         .join(StockDocument, StockDocument.id == StockMovement.document_id)
         .join(Product, Product.id == StockMovement.product_id)
         .join(Location, Location.id == StockMovement.location_id)
         .join(User, User.id == StockMovement.user_id)
+        .outerjoin(SalesImport, _report_of)
     )
     if type:
         stmt = stmt.where(StockDocument.type.in_(type))
@@ -292,6 +316,7 @@ def stock(
     location_id: int | None = None,
     category_id: int | None = None,
     include_zero: bool = False,
+    used_days: Annotated[int | None, Query(description="usage over the last 1, 7 or 30 business days")] = None,
 ) -> list[StockRow]:
     stmt = (
         select(StockBalance, Product, Category, Location.name)
@@ -313,8 +338,12 @@ def stock(
         select(StockBalance.product_id, func.sum(StockBalance.qty_base)).where(StockBalance.product_id.in_({p.id for _, p, _, _ in rows}))
         .group_by(StockBalance.product_id)
     ).all())
+    usage_service.check_period(used_days)
+    used = usage_service.usage(db, used_days, by_location=True) if used_days else {}
     return [
         StockRow(
+            used_base=used.get((p.id, b.location_id), (Decimal(0), Decimal(0)))[0] if used_days else None,
+            count_loss_base=used.get((p.id, b.location_id), (Decimal(0), Decimal(0)))[1] if used_days else None,
             product_id=p.id, product_name=p.name, product_sku=p.sku, category_code=c.code, category_name=c.name,
             unit=p.unit, base_unit=p.base_unit, unit_size=p.unit_size, location_id=b.location_id, location_name=loc,
             qty_base=b.qty_base, value=b.qty_base * p.purchase_price / p.unit_size, min_stock_base=p.min_stock_base,

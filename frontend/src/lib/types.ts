@@ -8,7 +8,6 @@ export type Permission =
   | "post_receipt"
   | "post_write_off"
   | "post_transfer"
-  | "allow_negative"
   | "backdate"
   | "reverse_document"
   | "inventory_count"
@@ -85,6 +84,9 @@ export interface Product {
   stock_value: string;
   is_low_stock: boolean;
   units_locked: boolean;
+  /** usage over the requested period (used_days) */
+  used_base?: string | null;
+  count_loss_base?: string | null;
 }
 
 export interface ProductDetail extends Product {
@@ -137,7 +139,10 @@ export interface StockDocument {
   allow_negative: boolean;
   backdate_confirmed: boolean;
   created_by: number;
+  /** POS documents: the report's author */
   created_by_name: string;
+  /** the account that posted it */
+  entered_by_name?: string;
   created_at: string;
   posted_at: string | null;
   inventory_id: number | null;
@@ -203,6 +208,9 @@ export interface StockRow {
   min_stock_base: string;
   /** the product's total is at or below its minimum: shown red */
   is_low_stock: boolean;
+  /** usage over the requested period (used_days) */
+  used_base?: string | null;
+  count_loss_base?: string | null;
 }
 
 export type InventoryStatus = "in_progress" | "completed" | "cancelled";
@@ -317,6 +325,8 @@ export interface UsageItem extends UnitInfo {
   unit_cost_base: string;
   amount: string;
   balance_base: string | null;
+  /** over all places (drafts): running out compares this to the minimum */
+  total_base?: string | null;
   min_stock_base: string;
   /** not written off: this completed inventory counted it after the sales (drafts: will be skipped) */
   covered_inventory_id: number | null;

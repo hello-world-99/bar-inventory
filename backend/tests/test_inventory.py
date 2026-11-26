@@ -274,3 +274,22 @@ def test_parallel_completion_only_once(client, db, admin_h, staff_h, world):
     assert sorted(codes) == [200, 409, 409]
     assert balance(db, world["vodka"], world["main"]) == 3 * 700
     assert db.execute(text("SELECT count(*) FROM stock_documents WHERE type='inventory_adjustment'")).scalar() == 1
+
+
+def test_complete_refuses_a_negative_result(client, db, admin_h, world):
+    """Reply 98: counted 5, then 8 written off before completion -> -3 would be left: refused; count again -> fine."""
+    receipt(client, admin_h, world, qty="10")
+    inv = start(client, admin_h, world)
+    assert count(client, admin_h, inv, world["vodka"], [(5, "bottle")]).status_code == 200
+    assert write_off(client, admin_h, world, "8").status_code == 201  # 10 on the books -> 2
+    r = complete(client, admin_h, inv)
+    assert r.status_code == 422, r.text
+    d = r.json()["detail"]
+    assert d["code"] == "insufficient_stock" and d["can_override"] is False and "Count these products again" in d["message"]
+    assert d["items"][0]["after"] == "-2100.000"  # 3500 counted - 5600 written off after
+    assert client.get(f"{P}/inventories/{inv['id']}", headers=admin_h).json()["status"] == "in_progress"
+    assert balance(db, world["vodka"], world["main"]) == 1400
+    assert count(client, admin_h, inv, world["vodka"], [(0, "bottle")]).status_code == 200
+    assert complete(client, admin_h, inv).status_code == 200
+    assert balance(db, world["vodka"], world["main"]) == 0
+    assert_journal_consistent(db)

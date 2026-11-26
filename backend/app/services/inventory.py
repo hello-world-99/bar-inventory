@@ -198,6 +198,7 @@ def complete(db: Session, user: User, inventory_id: int, zero_uncounted: bool) -
                 )
             )
     db.flush()
+    _refuse_negative(db, inv, deltas, products, {line.product_id: line for line in counted})
 
     doc_id = None
     if deltas:
@@ -210,7 +211,7 @@ def complete(db: Session, user: User, inventory_id: int, zero_uncounted: bool) -
             allow_negative=False,
         )
         doc.lines = doc_lines
-        # The adjustment makes the balance equal the count; it is exempt from the negative-stock check.
+        # The adjustment makes the balance equal the count; _refuse_negative above has checked the result.
         _post(db, user, doc, deltas, check_negative=False)
         doc_id = doc.id
 
@@ -225,6 +226,29 @@ def complete(db: Session, user: User, inventory_id: int, zero_uncounted: bool) -
     db.flush()
     db.refresh(inv)
     return inv
+
+
+def _refuse_negative(db: Session, inv: Inventory, deltas: list[Delta], products: dict[int, Product], lines: dict[int, InventoryLine]) -> None:
+    """Owner (reply 96/98): stock never goes below zero, a count included. The adjustment sets the stock to what was
+    counted at `counted_at`; if more left the place after that than was counted, the data contradicts itself
+    (balances are locked, so this is final). The line has to be counted again."""
+    if not deltas:
+        return
+    current = dict(db.execute(select(StockBalance.product_id, StockBalance.qty_base).where(
+        StockBalance.location_id == inv.location_id, StockBalance.product_id.in_([d.product_id for d in deltas]))).all())
+    short = []
+    for d in deltas:
+        after = (current.get(d.product_id, Decimal(0)) + d.delta).quantize(QTY_QUANT)
+        if after < 0:
+            p, line = products[d.product_id], lines[d.product_id]
+            short.append((p, line, after))
+    if short:
+        parts = [f"{p.name}: counted {line.counted_base.normalize():f} {p.base_unit.value}, but more was written off after the count, "
+                 f"so the stock would be {after.normalize():f} {p.base_unit.value}" for p, line, after in short]
+        raise error(422, "Stock cannot go below zero (" + "; ".join(parts) + "). Count these products again, then complete.",
+                    "insufficient_stock", can_override=False,
+                    items=[{"product_id": p.id, "location_id": inv.location_id, "counted": str(line.counted_base), "after": str(after)}
+                           for p, line, after in short])
 
 
 def _lock_products_any(db: Session, ids: list[int]) -> dict[int, Product]:

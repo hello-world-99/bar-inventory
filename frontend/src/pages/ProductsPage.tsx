@@ -6,6 +6,7 @@ import { useTranslation } from "react-i18next";
 import { useAuth } from "@/auth/AuthContext";
 import { DataTable } from "@/components/DataTable";
 import { Modal } from "@/components/Modal";
+import { StockChart } from "@/components/StockChart";
 import { Alert, Badge, Button, Field, Input, PageHeader, Select } from "@/components/ui";
 import { api } from "@/lib/api";
 import { errorMessage } from "@/lib/errors";
@@ -188,7 +189,7 @@ function ProductForm({ product, onDone }: { product?: Product; onDone: () => voi
 }
 
 // ----------------------------------------------------------------------- detail
-function ProductView({ id, onClose }: { id: number; onClose: () => void }) {
+export function ProductView({ id, onClose }: { id: number; onClose: () => void }) {
   const { t } = useTranslation();
   const { can } = useAuth();
   const fmt = useQty();
@@ -253,6 +254,8 @@ function ProductView({ id, onClose }: { id: number; onClose: () => void }) {
               </div>
             </div>
           </div>
+
+          <StockChart productId={p.id} unit={p} />
 
           {can("manage_catalog") && (
             <div className="flex flex-wrap gap-2">

@@ -115,11 +115,16 @@ def _report(db: Session, imp: SalesImport, location_id: int | None = None) -> Sa
     products = {p.id: p for p in db.scalars(select(Product).where(Product.id.in_(by_product)))}
     loc = location_id if imp.status == SalesImportStatus.draft else None
     balances = {}
+    totals: dict[int, Decimal] = {}
     covered: dict[int, tuple[int, datetime]] = {}
     if loc is not None:  # preview of what posting at this location would do
         covered = sales.covered_pairs(db, sales.day_start(db, imp.sales_date), loc, by_product)
         balances = dict(db.execute(
             select(StockBalance.product_id, StockBalance.qty_base).where(StockBalance.location_id == loc, StockBalance.product_id.in_(by_product))
+        ).all())
+        totals = dict(db.execute(
+            select(StockBalance.product_id, func.sum(StockBalance.qty_base)).where(StockBalance.product_id.in_(by_product))
+            .group_by(StockBalance.product_id)
         ).all())
     written = sales._written_off(db, imp) if imp.status == SalesImportStatus.posted else {}
     items = []
@@ -134,6 +139,7 @@ def _report(db: Session, imp: SalesImport, location_id: int | None = None) -> Sa
             product_id=p.id, product_name=p.name, product_sku=p.sku, unit=p.unit, base_unit=p.base_unit, unit_size=p.unit_size,
             is_active=p.is_active, qty_base=qty, unit_cost_base=cost, amount=qty * cost,
             balance_base=balances.get(pid, Decimal(0)) if loc is not None else None, parts=parts, min_stock_base=p.min_stock_base,
+            total_base=totals.get(pid, Decimal(0)) if loc is not None else None,
             covered_inventory_id=(frozen_cover.get(pid) or covered.get(pid) or (None, None))[0],
             covered_at=(frozen_cover.get(pid) or covered.get(pid) or (None, None))[1],
             written_off_base=written.get(pid, Decimal(0)) if imp.status == SalesImportStatus.posted else None,

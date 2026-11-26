@@ -342,7 +342,7 @@ def post(db: Session, user: User, import_id: uuid.UUID, body: PostIn) -> SalesIm
         # The remaining pairs are not covered (checked above under the same locks), which is exactly what the
         # usual backdate check looks for: nothing more to check.
         doc = posting.post_write_off(db, user, wo, posting.request_hash("sales_write_off", wo), pre_check=lambda _pairs: None,
-                                     cost_overrides={pid: costs[pid] for pid in remaining})
+                                     cost_overrides={pid: costs[pid] for pid in remaining}, sales_import_id=imp.id)
 
     for p in usage.parts:
         p.unit_cost_base = costs.get(p.product_id)
@@ -394,7 +394,7 @@ def _rewrite(db: Session, user: User, imp: SalesImport, old: dict[int, Decimal],
 
     rev = ReverseIn(id=reversal_id, comment=comment)
     posting.reverse(db, user, imp.write_off_id, rev, posting.request_hash("reversal", ReverseKey(original=imp.write_off_id, body=rev)),
-                    check_absorbed=False, from_sales_report=True)
+                    check_absorbed=False, from_sales_report=True, sales_import_id=imp.id)
     if comp:  # before the new write-off, so the running balance never dips falsely
         at = min(covered[pid][1] for pid in comp)
         inv_ids = sorted({covered[pid][0] for pid in comp})
@@ -427,7 +427,7 @@ def _rewrite(db: Session, user: User, imp: SalesImport, old: dict[int, Decimal],
             ],
         )
         new = posting.post_write_off(db, user, wo, posting.request_hash("sales_write_off", wo), pre_check=lambda _pairs: None,
-                                     cost_overrides={pid: costs[pid] for pid in target})
+                                     cost_overrides={pid: costs[pid] for pid in target}, sales_import_id=imp.id)
     return new, covered, costs
 
 

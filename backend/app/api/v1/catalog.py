@@ -12,6 +12,8 @@ from app.api.deps import CurrentUser, DbSession, require
 from app.api.errors import integrity_to_http
 from app.core.permissions import Perm
 from app.core.units import BASE_OF, UnitError, resolve_unit_size
+from app.services import history as history_service
+from app.services import usage as usage_service
 from app.services.posting import to_won, usd_rate
 from app.models import (
     Category,
@@ -34,6 +36,7 @@ from app.schemas_catalog import (
     LocationOut,
     LocationUpdate,
     ProductCreate,
+    ProductHistory,
     ProductDetail,
     ProductOut,
     ProductPage,
@@ -217,6 +220,7 @@ def list_products(
     order: Literal["asc", "desc"] = "asc",
     limit: Annotated[int, Query(ge=1, le=1000)] = 500,
     offset: Annotated[int, Query(ge=0)] = 0,
+    used_days: Annotated[int | None, Query(description="usage over the last 1, 7 or 30 business days")] = None,
 ) -> ProductPage:
     stmt = _product_query().where(_active_clause(Product.is_active, active))
     if q:
@@ -240,7 +244,13 @@ def list_products(
     total = db.scalar(select(func.count()).select_from(stmt.order_by(None).subquery())) or 0
     key = SORTS[sort]
     stmt = stmt.order_by(key.desc() if order == "desc" else key.asc(), Product.id).limit(limit).offset(offset)
-    return ProductPage(items=[_to_out(r) for r in db.execute(stmt)], total=total)
+    usage_service.check_period(used_days)
+    items = [_to_out(r) for r in db.execute(stmt)]
+    if used_days:
+        used = usage_service.usage(db, used_days, by_location=False)
+        for it in items:
+            it.used_base, it.count_loss_base = used.get((it.id,), (Decimal(0), Decimal(0)))
+    return ProductPage(items=items, total=total)
 
 
 def _get_product_row(db: Session, product_id: int):
@@ -248,6 +258,16 @@ def _get_product_row(db: Session, product_id: int):
     if row is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Product not found")
     return row
+
+
+@router.get("/products/{product_id}/history", response_model=ProductHistory)
+def product_history(product_id: int, _: Viewer, db: DbSession, days: int = 30) -> ProductHistory:
+    """Stock at the end of each business day (the chart on the product card, reply 98)."""
+    history_service.check_period(days)
+    product = db.get(Product, product_id)
+    if product is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Product not found")
+    return ProductHistory(product_id=product.id, min_stock_base=product.min_stock_base, **history_service.history(db, product.id, days))
 
 
 @router.get("/products/{product_id}", response_model=ProductDetail)

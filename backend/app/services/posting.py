@@ -220,23 +220,14 @@ def _post(
         after.append(running[key])
         if check_negative and d.delta < 0 and running[key] < 0:
             s = shortages.setdefault(
-                key, {"product_id": d.product_id, "location_id": d.location_id, "available": str(balances[key].qty_base), "requested": Decimal(0)}
+                key, {"product_id": d.product_id, "location_id": d.location_id, "available": balances[key].qty_base, "requested": Decimal(0)}
             )
             s["requested"] -= d.delta
     if shortages:
-        items = [s | {"requested": str(s["requested"])} for s in shortages.values()]
-        if not allow_negative_requested:
-            can = has_perm(user.role, Perm.allow_negative)
-            raise error(
-                422,
-                "Not enough stock" + ("; confirm to allow a negative balance" if can else ""),
-                "insufficient_stock",
-                items=items,
-                can_override=can,
-            )
-        if not has_perm(user.role, Perm.allow_negative):
-            raise error(403, "Only an administrator can allow a negative balance", "negative_forbidden", items=items)
-        doc.allow_negative = True
+        # Owner (reply 96): a bar cannot have less than nothing on the shelf, so a negative balance is never
+        # allowed, for anyone. The way out is to record the missing receipt or count the stock first.
+        # `allow_negative` in requests is accepted for old clients and ignored; old documents keep their flag.
+        raise _shortage_error(db, shortages)
 
     doc.status = DocStatus.draft
     db.add(doc)
@@ -284,6 +275,20 @@ def _new_doc(body, doc_type: DocType, user: User, doc_date: datetime, req_hash: 
         allow_negative=False,
         **fields,
     )
+
+
+def _shortage_error(db: Session, shortages: dict[tuple[int, int], dict[str, Any]]) -> HTTPException:
+    names = dict(db.execute(select(Product.id, Product.name).where(Product.id.in_({k[0] for k in shortages}))).all())
+    units = dict(db.execute(select(Product.id, Product.base_unit).where(Product.id.in_({k[0] for k in shortages}))).all())
+    places = dict(db.execute(select(Location.id, Location.name).where(Location.id.in_({k[1] for k in shortages}))).all())
+    parts = []
+    for (pid, loc), s in shortages.items():
+        unit = units[pid].value
+        parts.append(f"{names[pid]} at {places[loc]}: {s['available'].normalize():f} {unit} in stock, "
+                     f"{s['requested'].normalize():f} {unit} needed")
+    items = [s | {"available": str(s["available"]), "requested": str(s["requested"])} for s in shortages.values()]
+    return error(422, "Not enough stock (" + "; ".join(parts) + "). Stock cannot go below zero: post the missing receipt "
+                 "or count the stock first.", "insufficient_stock", items=items, can_override=False)
 
 
 def _backdate_hook(db: Session, user: User, doc: StockDocument, confirm: bool) -> Callable[[list[tuple[int, int]]], None]:
@@ -348,9 +353,10 @@ def post_write_off(
     db: Session, user: User, body: WriteOffIn, req_hash: str,
     pre_check: Callable[[list[tuple[int, int]]], None] | None = None,
     cost_overrides: dict[int, Decimal] | None = None,
+    sales_import_id: uuid.UUID | None = None,
 ) -> StockDocument:
-    """pre_check replaces the backdate check, cost_overrides the current cost per base unit (POS sales,
-    app/services/sales.py)."""
+    """pre_check replaces the backdate check, cost_overrides the current cost per base unit, sales_import_id links
+    the document to its POS report (POS sales, app/services/sales.py)."""
     now = db_now(db)
     doc_date = body.doc_date or now
     check_date_bounds(doc_date, now)
@@ -365,7 +371,7 @@ def post_write_off(
         lines.append(StockDocumentLine(line_no=i, product_id=p.id, location_from_id=line.location_id, qty_base=qty, unit_cost_base=cost))
         deltas.append(Delta(p.id, line.location_id, -qty, cost))
 
-    doc = _new_doc(body, DocType.write_off, user, doc_date, req_hash, reason=body.reason)
+    doc = _new_doc(body, DocType.write_off, user, doc_date, req_hash, reason=body.reason, sales_import_id=sales_import_id)
     doc.lines = lines
     return _post(db, user, doc, deltas, check_negative=True, allow_negative_requested=body.allow_negative,
                  pre_check=pre_check or _backdate_hook(db, user, doc, body.confirm_backdate))
@@ -395,7 +401,7 @@ def post_transfer(db: Session, user: User, body: TransferIn, req_hash: str) -> S
 
 
 def reverse(db: Session, user: User, original_id: uuid.UUID, body: ReverseIn, req_hash: str, *,
-            check_absorbed: bool = True, from_sales_report: bool = False) -> StockDocument:
+            check_absorbed: bool = True, from_sales_report: bool = False, sales_import_id: uuid.UUID | None = None) -> StockDocument:
     """check_absorbed=False only for a caller that compensates the absorbed pairs itself (POS correction, reply 48).
     A POS report's write-off is undone only through the report (reply 50, P2): reversing it from the journal would
     leave the report pointing at a cancelled document and, after a correction, break the counts."""
@@ -464,6 +470,7 @@ def reverse(db: Session, user: User, original_id: uuid.UUID, body: ReverseIn, re
         created_by=user.id,
         request_hash=req_hash,
         allow_negative=False,
+        sales_import_id=sales_import_id,
     )
     doc.lines = lines
     return _post(db, user, doc, deltas, check_negative=True, allow_negative_requested=body.allow_negative,
